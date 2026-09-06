@@ -545,8 +545,7 @@ const
 
 type
   TPitchTraceSample = record
-    Beat:  real;     // beat the sample was taken at, so it lines up with the notes
-    Tone:  real;     // tone as reported by the analyser
+    Tone:  real;     // absolute tone as reported by the analyser
     Valid: boolean;  // false when the analyser only saw noise
   end;
 
@@ -583,17 +582,26 @@ begin
     Exit;
   if (PlayerIndex > High(AudioInputProcessor.Sound)) then
     Exit;
-  if (CurrentSong.Tracks = nil) or (Track > High(CurrentSong.Tracks)) then
+  if (Track < 0) or (CurrentSong.Tracks = nil) or (Track > High(CurrentSong.Tracks)) then
     Exit;
 
   CurrentLine := CurrentSong.Tracks[Track].CurrentLine;
-  if (CurrentLine > High(CurrentSong.Tracks[Track].Lines)) then
+  if (CurrentLine < 0) or (CurrentLine > High(CurrentSong.Tracks[Track].Lines)) then
+    Exit;
+
+  // A line that carries no notes still holds the High(Integer) sentinel USong
+  // uses while parsing. Adding to it overflows, and the octave fold below would
+  // then run for hundreds of millions of iterations per sample and freeze the
+  // render thread outright.
+  if (CurrentSong.Tracks[Track].Lines[CurrentLine].HighNote < 0) then
     Exit;
 
   // The staff is positioned from the current line's base note. This is valid
   // from the moment the song loads, so the trace can be drawn before the first
   // lyric arrives.
   BaseNote := CurrentSong.Tracks[Track].Lines[CurrentLine].BaseNote;
+  if (BaseNote < -128) or (BaseNote > 128) then
+    Exit;
 
   // Fold against the note actually being sung, matching what the scoring code
   // in UNote does. Folding against the line's base note instead puts the trace
@@ -614,20 +622,29 @@ begin
   if (Sound = nil) then
     Exit;
 
-  Slot := PitchTraceNext[PlayerIndex];
-  PitchTraceBuffer[PlayerIndex][Slot].Beat  := LyricsState.MidBeat;
-  PitchTraceBuffer[PlayerIndex][Slot].Tone  := Sound.Tone;
-  PitchTraceBuffer[PlayerIndex][Slot].Valid := Sound.ToneValid;
-  PitchTraceNext[PlayerIndex] := (Slot + 1) mod PitchTraceLength;
-  if (PitchTraceCount[PlayerIndex] < PitchTraceLength) then
-    Inc(PitchTraceCount[PlayerIndex]);
+  // ToneAbs rather than Tone: the scoring code rewrites Tone in place to line
+  // it up with the note being sung, so the same pitch can be stored under
+  // different values depending on whether a note was active.
+  //
+  // Only append while the song is actually being analysed. Draw keeps running
+  // when paused or finished, and appending there would overwrite the whole
+  // history with one repeated reading.
+  if (not ScreenSing.Paused) then
+  begin
+    Slot := PitchTraceNext[PlayerIndex];
+    PitchTraceBuffer[PlayerIndex][Slot].Tone  := Sound.ToneAbs;
+    PitchTraceBuffer[PlayerIndex][Slot].Valid := Sound.ToneValid;
+    PitchTraceNext[PlayerIndex] := (Slot + 1) mod PitchTraceLength;
+    if (PitchTraceCount[PlayerIndex] < PitchTraceLength) then
+      Inc(PitchTraceCount[PlayerIndex]);
+  end;
 
   Count := PitchTraceCount[PlayerIndex];
   if (Count < 2) then
     Exit;
 
   if (Party.bPartyGame) then
-    Col := GetPlayerColor(Ini.TeamColor[PlayerIndex])
+    Col := GetPlayerColor(Ini.TeamColor[Min(PlayerIndex, High(Ini.TeamColor))])
   else
     Col := GetPlayerColor(Ini.PlayerColor[PlayerIndex]);
 
@@ -648,11 +665,10 @@ begin
     if not PitchTraceBuffer[PlayerIndex][Index].Valid then
       Continue;
 
+    // Fold in one step rather than looping: a bad Centre would otherwise spin
+    // the loop for as long as the arithmetic takes to converge.
     Tone := PitchTraceBuffer[PlayerIndex][Index].Tone;
-    while (Tone - Centre > 6) do
-      Tone := Tone - 12;
-    while (Tone - Centre < -6) do
-      Tone := Tone + 12;
+    Tone := Tone - 12 * Floor((Tone - Centre + 6) / 12);
 
     X := Left + W * (1 - N / (PitchTraceLength - 1));
 
@@ -715,7 +731,7 @@ begin
   Note := Sound.ToneString;
 
   if (Party.bPartyGame) then
-    Col := GetPlayerColor(Ini.TeamColor[PlayerIndex])
+    Col := GetPlayerColor(Ini.TeamColor[Min(PlayerIndex, High(Ini.TeamColor))])
   else
     Col := GetPlayerColor(Ini.PlayerColor[PlayerIndex]);
 
@@ -729,6 +745,8 @@ begin
     SetFontColor(0.45, 0.45, 0.45, 1);
   PrintText(Note);
   SetFontStyle(ftRegular);
+  SetFontSize(10);
+  SetFontZ(0);
   SetFontColor(1, 1, 1, 1);
 end;
 
@@ -817,6 +835,8 @@ begin
     SetFontColor(0.7, 0.7, 0.7, 0.75);
   PrintText(Caption);
   SetFontStyle(ftRegular);
+  SetFontSize(10);
+  SetFontZ(0);
   SetFontColor(1, 1, 1, 1);
 end;
 
@@ -1579,6 +1599,7 @@ var
   I: integer;
   Difficulty: integer;
   TrackP1, TrackP2, TrackP3, TrackP4, TrackP5, TrackP6: integer;
+  PlayerTracks: array[0..5] of integer;
 const
   LineSpacingOneRow = 15;
   LineSpacingTwoRows = 15;
@@ -1695,11 +1716,22 @@ begin
   // Live note readout. Deliberately outside the per-layout blocks below,
   // which only run where the song has notes - this must keep updating during
   // the intro, instrumental sections and the gaps between phrases.
+  // Each player reads their own track: in a duet the even-numbered players
+  // sing track 1, and passing 0 for everyone would show them all player one's
+  // target note.
+  PlayerTracks[0] := TrackP1;
+  PlayerTracks[1] := TrackP2;
+  PlayerTracks[2] := TrackP3;
+  PlayerTracks[3] := TrackP4;
+  PlayerTracks[4] := TrackP5;
+  PlayerTracks[5] := TrackP6;
+
   for I := 0 to PlayersPlay - 1 do
-  begin
-    SingDrawPitchKey(20, 25 + I * 26, I);
-    SingDrawTargetKey(100, 25 + I * 26, 0, I);
-  end;
+    if (I <= High(PlayerTracks)) then
+    begin
+      SingDrawPitchKey(20, 25 + I * 26, I);
+      SingDrawTargetKey(100, 25 + I * 26, PlayerTracks[I], I);
+    end;
   // Draw the Notes
   if (PlayersPlay = 1) then
   begin
