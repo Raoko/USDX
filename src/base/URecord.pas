@@ -91,6 +91,7 @@ type
       ToneValid: boolean;    // true if Tone contains a valid value (otherwise it contains noise)
       Tone:      integer;    // tone relative to one octave (e.g. C2=C3=C4). Range: 0-11
       ToneAbs:   integer;    // absolute (full range) tone (e.g. C2<>C3). Range: 0..NumHalftones-1
+      ToneCents: integer;    // deviation from ToneAbs in cents. Range: -50..50
 
       // methods
       constructor Create;
@@ -374,6 +375,7 @@ begin
   ToneValid := false;
   ToneAbs := -1;
   Tone    := -1;
+  ToneCents := 0;
 
   LockAnalysisBuffer();
   try
@@ -435,6 +437,7 @@ end;
 function TCaptureBuffer.AnalyzePitch(PDA: TPDAType): boolean;
 var
   Correlation: TCorrelationArray;
+  Prev, Curr, Next, Denominator, Delta: real;
 begin
   // prepare to analyze
   SetFrequenciesAndDelays;
@@ -457,6 +460,30 @@ begin
   end;
 
   Tone := ToneAbs mod 12;
+
+  // The correlation array is sampled at exactly one entry per halftone, so
+  // fitting a parabola through the minimum and its two neighbours recovers the
+  // fractional part of the halftone - i.e. how far sharp or flat the singer is
+  // within the semitone. Without this the detector can only ever report whole
+  // semitones.
+  ToneCents := 0;
+  if (ToneAbs > 0) and (ToneAbs < NumHalftones - 1) then
+  begin
+    Prev := Correlation[ToneAbs - 1];
+    Curr := Correlation[ToneAbs];
+    Next := Correlation[ToneAbs + 1];
+    Denominator := Prev - 2 * Curr + Next;
+    if (Denominator <> 0) then
+    begin
+      Delta := 0.5 * (Prev - Next) / Denominator;
+      if (Delta > 0.5) then
+        Delta := 0.5
+      else if (Delta < -0.5) then
+        Delta := -0.5;
+      ToneCents := Round(Delta * 100);
+    end;
+  end;
+
   Result := true;
 end;
 

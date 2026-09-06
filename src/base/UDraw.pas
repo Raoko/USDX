@@ -573,7 +573,10 @@ var
   BaseNote:   integer;
   Slot, N, Index, Count, Used: integer;
   Tone, X, Y, Size, Fade: real;
-  Col:        TRGB;
+  TargetTone: integer;
+  HasTarget:  boolean;
+  TargetY, Offset: real;
+  Col, DotCol: TRGB;
   Quads:      TQuadList;
 begin
   if (Ini.PitchTrace = 0) then
@@ -608,14 +611,27 @@ begin
   // a whole octave from the player's own hit markers on lines spanning more
   // than an octave.
   Centre := BaseNote + 6;
+  HasTarget := false;
+  TargetTone := 0;
   for N := 0 to CurrentSong.Tracks[Track].Lines[CurrentLine].HighNote do
     with CurrentSong.Tracks[Track].Lines[CurrentLine].Notes[N] do
-      if (NoteType <> ntFreestyle) and
-         (StartBeat <= LyricsState.MidBeat) and
-         (StartBeat + Duration > LyricsState.MidBeat) then
+      if (NoteType <> ntFreestyle) then
       begin
-        Centre := Tone;
-        Break;
+        // The note being sung right now wins; otherwise remember the first one
+        // still ahead so the guide line can be drawn before it arrives.
+        if (StartBeat <= LyricsState.MidBeat) and
+           (StartBeat + Duration > LyricsState.MidBeat) then
+        begin
+          Centre := Tone;
+          TargetTone := Tone;
+          HasTarget := true;
+          Break;
+        end
+        else if (not HasTarget) and (StartBeat > LyricsState.MidBeat) then
+        begin
+          TargetTone := Tone;
+          HasTarget := true;
+        end;
       end;
 
   Sound := AudioInputProcessor.Sound[PlayerIndex];
@@ -653,6 +669,16 @@ begin
   // beat of a lyric line would blank the trace whenever no line is active,
   // which is exactly when it is most useful - finding the pitch before the
   // singing starts.
+  // A horizontal guide at the pitch the song is about to ask for. Seeing the
+  // line before the note arrives is what makes it possible to slide onto the
+  // pitch early rather than discovering it once the syllable has started.
+  if HasTarget then
+  begin
+    TargetY := Top - (TargetTone - BaseNote) * LineSpacing / 2;
+    Renderer.DrawLine(Left, TargetY, Left + W, TargetY, 0, 1,
+                      Col.R, Col.G, Col.B, 0.35);
+  end;
+
   // Collect the samples into a single quad list. Calling DrawQuad per sample
   // would allocate a fresh list several hundred times per frame.
   SetLength(Quads, Count);
@@ -687,15 +713,36 @@ begin
       Fade := 0.55;
     end;
 
+    // Colour the live head of the trace by how far it is from the target:
+    // green on the note, amber within a semitone, red beyond. The tail keeps
+    // the player colour so the shape of the last few seconds stays readable.
+    DotCol := Col;
+    if HasTarget and (N < 4) then
+    begin
+      Offset := Abs(Tone - TargetTone);
+      if (Offset <= 0.5) then
+      begin
+        DotCol.R := 0.25; DotCol.G := 0.95; DotCol.B := 0.35;
+      end
+      else if (Offset <= 1.5) then
+      begin
+        DotCol.R := 0.98; DotCol.G := 0.75; DotCol.B := 0.20;
+      end
+      else
+      begin
+        DotCol.R := 0.95; DotCol.G := 0.30; DotCol.B := 0.30;
+      end;
+    end;
+
     Quads[Used].X := X - Size / 2;
     Quads[Used].Y := Y - Size / 2;
     Quads[Used].Z := 0;
     Quads[Used].W := Size;
     Quads[Used].H := Size;
     Quads[Used].Gradient := gdNone;
-    Quads[Used].ColR := Col.R;
-    Quads[Used].ColG := Col.G;
-    Quads[Used].ColB := Col.B;
+    Quads[Used].ColR := DotCol.R;
+    Quads[Used].ColG := DotCol.G;
+    Quads[Used].ColB := DotCol.B;
     Quads[Used].Alpha := Fade;
     Inc(Used);
   end;
@@ -729,6 +776,16 @@ begin
   // note at this moment, so the readout stays live through the intro and
   // between phrases.
   Note := Sound.ToneString;
+
+  // Append how far inside the semitone the pitch sits, so holding a note that
+  // is technically 'A4' but consistently thirty cents flat is visible.
+  if Sound.ToneValid then
+  begin
+    if (Sound.ToneCents > 0) then
+      Note := Note + ' +' + IntToStr(Sound.ToneCents)
+    else if (Sound.ToneCents < 0) then
+      Note := Note + ' ' + IntToStr(Sound.ToneCents);
+  end;
 
   if (Party.bPartyGame) then
     Col := GetPlayerColor(Ini.TeamColor[Min(PlayerIndex, High(Ini.TeamColor))])
@@ -776,6 +833,9 @@ var
   Active: boolean;
   Found: boolean;
   Caption: UTF8String;
+  Sound: TCaptureBuffer;
+  Delta: integer;
+  ArrowX, ArrowY: real;
 begin
   if (Ini.PitchKey = 0) then
     Exit;
@@ -834,6 +894,28 @@ begin
   else
     SetFontColor(0.7, 0.7, 0.7, 0.75);
   PrintText(Caption);
+
+  // A triangle showing which way to move to reach the note. Drawn rather than
+  // printed so it does not depend on the font carrying arrow glyphs.
+  if (PlayerIndex >= 0) and (PlayerIndex < IMaxPlayerCount) and
+     (PlayerIndex <= High(AudioInputProcessor.Sound)) then
+  begin
+    Sound := AudioInputProcessor.Sound[PlayerIndex];
+    if (Sound <> nil) and Sound.ToneValid then
+    begin
+      // Compare within the octave: the singer is not expected to match the
+      // song's register, only its pitch class, which is how scoring works too.
+      Delta := ((TargetTone - Sound.ToneAbs) mod 12 + 18) mod 12 - 6;
+      ArrowX := Left + TextWidth(Caption) + 6;
+      ArrowY := Top + 9;
+      if (Delta >= 1) then
+        Renderer.DrawTriangle(ArrowX, ArrowY - 6, ArrowX + 5, ArrowY + 3,
+                              ArrowX - 5, ArrowY + 3, 0, 0.45, 0.85, 1, 0.9)
+      else if (Delta <= -1) then
+        Renderer.DrawTriangle(ArrowX, ArrowY + 6, ArrowX + 5, ArrowY - 3,
+                              ArrowX - 5, ArrowY - 3, 0, 0.45, 0.85, 1, 0.9);
+    end;
+  end;
   SetFontStyle(ftRegular);
   SetFontSize(10);
   SetFontZ(0);
