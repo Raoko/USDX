@@ -278,8 +278,21 @@ var
   CountGr:    integer;
   TrackIndex: integer;
   PetGr:      integer;
+  PlayerIndex: integer;
 begin
   LyricsState.UpdateBeats();
+
+  // Analyse every player's input on every frame, before the beat gate below.
+  // NewBeatDetect only runs once CurrentBeatD reaches 0, which does not happen
+  // until the song's GAP has elapsed - over twenty seconds in some songs - so
+  // anything that wants to show the singer's pitch during an intro, an
+  // instrumental passage or between phrases had no data to work from at all.
+  // AnalyzeBuffer takes the analysis-buffer lock itself and the record options
+  // screen already calls it once per frame, so this is safe to repeat here.
+  for PlayerIndex := 0 to PlayersPlay - 1 do
+    if (PlayerIndex <= High(AudioInputProcessor.Sound)) and
+       (AudioInputProcessor.Sound[PlayerIndex] <> nil) then
+      AudioInputProcessor.Sound[PlayerIndex].AnalyzeBuffer;
 
   PetGr := 0;
   if (CurrentSong.isDuet) and (PlayersPlay <> 1) then

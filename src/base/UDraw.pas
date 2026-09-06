@@ -594,7 +594,21 @@ begin
   // from the moment the song loads, so the trace can be drawn before the first
   // lyric arrives.
   BaseNote := CurrentSong.Tracks[Track].Lines[CurrentLine].BaseNote;
+
+  // Fold against the note actually being sung, matching what the scoring code
+  // in UNote does. Folding against the line's base note instead puts the trace
+  // a whole octave from the player's own hit markers on lines spanning more
+  // than an octave.
   Centre := BaseNote + 6;
+  for N := 0 to CurrentSong.Tracks[Track].Lines[CurrentLine].HighNote do
+    with CurrentSong.Tracks[Track].Lines[CurrentLine].Notes[N] do
+      if (NoteType <> ntFreestyle) and
+         (StartBeat <= LyricsState.MidBeat) and
+         (StartBeat + Duration > LyricsState.MidBeat) then
+      begin
+        Centre := Tone;
+        Break;
+      end;
 
   Sound := AudioInputProcessor.Sound[PlayerIndex];
   if (Sound = nil) then
@@ -641,8 +655,6 @@ begin
       Tone := Tone + 12;
 
     X := Left + W * (1 - N / (PitchTraceLength - 1));
-    if (X < Left) then
-      Continue;
 
     Y := Top - (Tone - BaseNote) * LineSpacing / 2;
 

@@ -542,7 +542,10 @@ const
 function TCaptureBuffer.GetToneString: string;
 begin
   if (ToneValid) then
-    Result := ToneStrings[Tone] + IntToStr(ToneAbs div 12 + 2)
+    // Tone is not reliably a pitch class here: the scoring code in UNote shifts
+    // it by whole octaves in place to line it up with the note being sung, so
+    // it can sit outside 0..11. Fold it back before indexing.
+    Result := ToneStrings[((Tone mod 12) + 12) mod 12] + IntToStr(ToneAbs div 12 + 2)
   else
     Result := '-';
 end;
