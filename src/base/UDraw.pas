@@ -636,7 +636,9 @@ begin
 
     Y := Top - (Tone - BaseNote) * LineSpacing / 2;
 
-    Renderer.DrawQuad(X, Y - 1.5, 1, 3, 3, Col.R, Col.G, Col.B, 0.8);
+    // Z must match the other quads drawn on this screen: the background is
+    // drawn at Z=0, so anything further away is hidden by the depth test.
+    Renderer.DrawQuad(X - 2, Y - 2, 0, 4, 4, Col.R, Col.G, Col.B, 0.9);
   end;
 end;
 
