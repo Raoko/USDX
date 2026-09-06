@@ -572,9 +572,10 @@ var
   CurrentLine: integer;
   Centre:     real;
   BaseNote:   integer;
-  Slot, N, Index, Count: integer;
-  Tone, X, Y: real;
+  Slot, N, Index, Count, Used: integer;
+  Tone, X, Y, Size, Fade: real;
   Col:        TRGB;
+  Quads:      TQuadList;
 begin
   if (Ini.PitchTrace = 0) then
     Exit;
@@ -596,6 +597,8 @@ begin
   Centre := BaseNote + 6;
 
   Sound := AudioInputProcessor.Sound[PlayerIndex];
+  if (Sound = nil) then
+    Exit;
 
   Slot := PitchTraceNext[PlayerIndex];
   PitchTraceBuffer[PlayerIndex][Slot].Beat  := LyricsState.MidBeat;
@@ -619,6 +622,11 @@ begin
   // beat of a lyric line would blank the trace whenever no line is active,
   // which is exactly when it is most useful - finding the pitch before the
   // singing starts.
+  // Collect the samples into a single quad list. Calling DrawQuad per sample
+  // would allocate a fresh list several hundred times per frame.
+  SetLength(Quads, Count);
+  Used := 0;
+
   for N := 0 to Count - 1 do
   begin
     Index := (PitchTraceNext[PlayerIndex] - 1 - N + 2 * PitchTraceLength) mod PitchTraceLength;
@@ -638,13 +646,37 @@ begin
 
     Y := Top - (Tone - BaseNote) * LineSpacing / 2;
 
-    // The newest samples are drawn solid so the current pitch stands out from
-    // the fading tail behind it.
+    // The newest samples are drawn larger and solid so the current pitch
+    // stands out from the fading tail behind it.
     if (N < 4) then
-      Renderer.DrawQuad(X - 3, Y - 3, 0, 6, 6, Col.R, Col.G, Col.B, 1)
+    begin
+      Size := 6;
+      Fade := 1;
+    end
     else
-      Renderer.DrawQuad(X - 2, Y - 2, 0, 4, 4, Col.R, Col.G, Col.B, 0.55);
+    begin
+      Size := 4;
+      Fade := 0.55;
+    end;
+
+    Quads[Used].X := X - Size / 2;
+    Quads[Used].Y := Y - Size / 2;
+    Quads[Used].Z := 0;
+    Quads[Used].W := Size;
+    Quads[Used].H := Size;
+    Quads[Used].Gradient := gdNone;
+    Quads[Used].ColR := Col.R;
+    Quads[Used].ColG := Col.G;
+    Quads[Used].ColB := Col.B;
+    Quads[Used].Alpha := Fade;
+    Inc(Used);
   end;
+
+  if (Used = 0) then
+    Exit;
+
+  SetLength(Quads, Used);
+  Renderer.DrawQuads(Quads);
 end;
 
 procedure SingDrawPitchKey(Left, Top: real; PlayerIndex: integer);
@@ -661,6 +693,8 @@ begin
     Exit;
 
   Sound := AudioInputProcessor.Sound[PlayerIndex];
+  if (Sound = nil) then
+    Exit;
 
   // ToneString already yields names like 'A4' or 'C#3', and '-' when the
   // analyser has no usable pitch. It does not depend on the song having a
