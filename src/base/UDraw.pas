@@ -571,13 +571,15 @@ var
   CurrentLine: integer;
   Centre:     real;
   BaseNote:   integer;
-  Slot, N, Index, Count, Used: integer;
-  Tone, X, Y, Size, Fade: real;
+  Slot, N, Index, Count, Used, Points, Window: integer;
+  Tone, Fade, Sum: real;
   TargetTone: integer;
   HasTarget:  boolean;
   TargetY, Offset: real;
   Col, DotCol: TRGB;
-  Quads:      TQuadList;
+  Segments:   TLineList;
+  PtX, PtY, PtTone, Smoothed: array[0..PitchTraceLength-1] of real;
+  PtOk: array[0..PitchTraceLength-1] of boolean;
 begin
   if (Ini.PitchTrace = 0) then
     Exit;
@@ -663,6 +665,7 @@ begin
     Col := GetPlayerColor(Ini.TeamColor[Min(PlayerIndex, High(Ini.TeamColor))])
   else
     Col := GetPlayerColor(Ini.PlayerColor[PlayerIndex]);
+  DotCol := Col;
 
   // Samples are laid out by age rather than by beat: the newest sits at the
   // right-hand edge and older ones scroll away to the left. Anchoring to the
@@ -679,47 +682,62 @@ begin
                       Col.R, Col.G, Col.B, 0.35);
   end;
 
-  // Collect the samples into a single quad list. Calling DrawQuad per sample
-  // would allocate a fresh list several hundred times per frame.
-  SetLength(Quads, Count);
-  Used := 0;
-
-  for N := 0 to Count - 1 do
+  // Lay the samples out oldest-first so the trail can be joined up left to
+  // right as one continuous line.
+  Points := 0;
+  for N := Count - 1 downto 0 do
   begin
     Index := (PitchTraceNext[PlayerIndex] - 1 - N + 2 * PitchTraceLength) mod PitchTraceLength;
 
-    if not PitchTraceBuffer[PlayerIndex][Index].Valid then
-      Continue;
+    PtOk[Points] := PitchTraceBuffer[PlayerIndex][Index].Valid;
+    PtX[Points] := Left + W * (1 - N / (PitchTraceLength - 1));
 
-    // Fold in one step rather than looping: a bad Centre would otherwise spin
-    // the loop for as long as the arithmetic takes to converge.
-    Tone := PitchTraceBuffer[PlayerIndex][Index].Tone;
-    Tone := Tone - 12 * Floor((Tone - Centre + 6) / 12);
-
-    X := Left + W * (1 - N / (PitchTraceLength - 1));
-
-    Y := Top - (Tone - BaseNote) * LineSpacing / 2;
-
-    // The newest samples are drawn larger and solid so the current pitch
-    // stands out from the fading tail behind it.
-    if (N < 4) then
+    if PtOk[Points] then
     begin
-      Size := 6;
-      Fade := 1;
-    end
-    else
-    begin
-      Size := 4;
-      Fade := 0.55;
+      Tone := PitchTraceBuffer[PlayerIndex][Index].Tone;
+      Tone := Tone - 12 * Floor((Tone - Centre + 6) / 12);
+      PtY[Points] := Top - (Tone - BaseNote) * LineSpacing / 2;
+      PtTone[Points] := Tone;
     end;
 
-    // Colour the live head of the trace by how far it is from the target:
-    // green on the note, amber within a semitone, red beyond. The tail keeps
-    // the player colour so the shape of the last few seconds stays readable.
+    Inc(Points);
+  end;
+
+  // Average each point with its neighbours. The detector only produces a new
+  // reading every few frames, so the raw trail is a staircase; smoothing turns
+  // it into the curve the ear actually hears.
+  for N := 0 to Points - 1 do
+  begin
+    if not PtOk[N] then
+      Continue;
+    Sum := 0;
+    Window := 0;
+    for Index := Max(0, N - 3) to Min(Points - 1, N + 3) do
+      if PtOk[Index] then
+      begin
+        Sum := Sum + PtY[Index];
+        Inc(Window);
+      end;
+    if (Window > 0) then
+      Smoothed[N] := Sum / Window
+    else
+      Smoothed[N] := PtY[N];
+  end;
+
+  SetLength(Segments, Points);
+  Used := 0;
+
+  for N := 0 to Points - 2 do
+  begin
+    // A break in detection leaves a gap rather than a line drawn across
+    // silence, which would imply a pitch that was never sung.
+    if (not PtOk[N]) or (not PtOk[N + 1]) then
+      Continue;
+
     DotCol := Col;
-    if HasTarget and (N < 4) then
+    if HasTarget and (N >= Points - 5) then
     begin
-      Offset := Abs(Tone - TargetTone);
+      Offset := Abs(PtTone[N] - TargetTone);
       if (Offset <= 0.5) then
       begin
         DotCol.R := 0.25; DotCol.G := 0.95; DotCol.B := 0.35;
@@ -734,24 +752,36 @@ begin
       end;
     end;
 
-    Quads[Used].X := X - Size / 2;
-    Quads[Used].Y := Y - Size / 2;
-    Quads[Used].Z := 0;
-    Quads[Used].W := Size;
-    Quads[Used].H := Size;
-    Quads[Used].Gradient := gdNone;
-    Quads[Used].ColR := DotCol.R;
-    Quads[Used].ColG := DotCol.G;
-    Quads[Used].ColB := DotCol.B;
-    Quads[Used].Alpha := Fade;
+    // Fade into the past so the eye lands on the current pitch.
+    Fade := 0.2 + 0.8 * (N / Points);
+
+    Segments[Used].X1 := PtX[N];
+    Segments[Used].Y1 := Smoothed[N];
+    Segments[Used].X2 := PtX[N + 1];
+    Segments[Used].Y2 := Smoothed[N + 1];
+    Segments[Used].Z := 0;
+    Segments[Used].Thickness := 2;
+    Segments[Used].ColR := DotCol.R;
+    Segments[Used].ColG := DotCol.G;
+    Segments[Used].ColB := DotCol.B;
+    Segments[Used].Alpha := Fade;
     Inc(Used);
   end;
 
-  if (Used = 0) then
-    Exit;
+  if (Used > 0) then
+  begin
+    SetLength(Segments, Used);
+    Renderer.DrawLines(Segments);
+  end;
 
-  SetLength(Quads, Used);
-  Renderer.DrawQuads(Quads);
+  // A marker on the head of the line, so the current pitch is unmistakable.
+  for N := Points - 1 downto 0 do
+    if PtOk[N] then
+    begin
+      Renderer.DrawQuad(PtX[N] - 3, Smoothed[N] - 3, 0, 6, 6,
+                        DotCol.R, DotCol.G, DotCol.B, 1);
+      Break;
+    end;
 end;
 
 procedure SingDrawPitchKey(Left, Top: real; PlayerIndex: integer);
@@ -797,7 +827,7 @@ begin
   SetFontPos(Left, Top);
   SetFontZ(0);
   if Sound.ToneValid then
-    SetFontColor(Col.R, Col.G, Col.B, 1)
+    SetFontColor(1, 0.85, 0.15, 1)
   else
     SetFontColor(0.45, 0.45, 0.45, 1);
   PrintText(Note);
