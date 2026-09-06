@@ -569,12 +569,10 @@ end;
 procedure SingDrawPitchTrace(Left, Top, W: real; Track, PlayerIndex: integer; LineSpacing: integer);
 var
   Sound:      TCaptureBuffer;
-  LineLength: real;
-  BeatToX:    real;
-  StartBeat:  real;
+  CurrentLine: integer;
   Centre:     real;
   BaseNote:   integer;
-  Slot, N, Index: integer;
+  Slot, N, Index, Count: integer;
   Tone, X, Y: real;
   Col:        TRGB;
 begin
@@ -584,12 +582,21 @@ begin
     Exit;
   if (PlayerIndex > High(AudioInputProcessor.Sound)) then
     Exit;
+  if (CurrentSong.Tracks = nil) or (Track > High(CurrentSong.Tracks)) then
+    Exit;
+
+  CurrentLine := CurrentSong.Tracks[Track].CurrentLine;
+  if (CurrentLine > High(CurrentSong.Tracks[Track].Lines)) then
+    Exit;
+
+  // The staff is positioned from the current line's base note. This is valid
+  // from the moment the song loads, so the trace can be drawn before the first
+  // lyric arrives.
+  BaseNote := CurrentSong.Tracks[Track].Lines[CurrentLine].BaseNote;
+  Centre := BaseNote + 6;
 
   Sound := AudioInputProcessor.Sound[PlayerIndex];
 
-  // Record this frame's pitch. The analyser runs continuously, so a tone is
-  // available even where the song has no note - that is the whole point of the
-  // trace: it keeps showing the voice between phrases.
   Slot := PitchTraceNext[PlayerIndex];
   PitchTraceBuffer[PlayerIndex][Slot].Beat  := LyricsState.MidBeat;
   PitchTraceBuffer[PlayerIndex][Slot].Tone  := Sound.Tone;
@@ -598,32 +605,25 @@ begin
   if (PitchTraceCount[PlayerIndex] < PitchTraceLength) then
     Inc(PitchTraceCount[PlayerIndex]);
 
-  if not CurrentSong.Tracks[Track].Lines[CurrentSong.Tracks[Track].CurrentLine].HasLength(LineLength) then
+  Count := PitchTraceCount[PlayerIndex];
+  if (Count < 2) then
     Exit;
-  if (LineLength <= 0) then
-    Exit;
-
-  BeatToX   := W / LineLength;
-  StartBeat := CurrentSong.Tracks[Track].Lines[CurrentSong.Tracks[Track].CurrentLine].Notes[0].StartBeat;
-  BaseNote  := CurrentSong.Tracks[Track].Lines[CurrentSong.Tracks[Track].CurrentLine].BaseNote;
-
-  // Centre of the staff, used to fold the sung tone into the octave that is
-  // currently on screen - the same trick the scoring code uses.
-  Centre := BaseNote + 6;
 
   if (Party.bPartyGame) then
     Col := GetPlayerColor(Ini.TeamColor[PlayerIndex])
   else
     Col := GetPlayerColor(Ini.PlayerColor[PlayerIndex]);
 
-  for N := 0 to PitchTraceCount[PlayerIndex] - 1 do
+  // Samples are laid out by age rather than by beat: the newest sits at the
+  // right-hand edge and older ones scroll away to the left. Anchoring to the
+  // beat of a lyric line would blank the trace whenever no line is active,
+  // which is exactly when it is most useful - finding the pitch before the
+  // singing starts.
+  for N := 0 to Count - 1 do
   begin
     Index := (PitchTraceNext[PlayerIndex] - 1 - N + 2 * PitchTraceLength) mod PitchTraceLength;
 
     if not PitchTraceBuffer[PlayerIndex][Index].Valid then
-      Continue;
-
-    if (PitchTraceBuffer[PlayerIndex][Index].Beat < StartBeat) then
       Continue;
 
     Tone := PitchTraceBuffer[PlayerIndex][Index].Tone;
@@ -632,15 +632,18 @@ begin
     while (Tone - Centre < -6) do
       Tone := Tone + 12;
 
-    X := Left + (PitchTraceBuffer[PlayerIndex][Index].Beat - StartBeat) * BeatToX;
-    if (X < Left) or (X > Left + W) then
+    X := Left + W * (1 - N / (PitchTraceLength - 1));
+    if (X < Left) then
       Continue;
 
     Y := Top - (Tone - BaseNote) * LineSpacing / 2;
 
-    // Z must match the other quads drawn on this screen: the background is
-    // drawn at Z=0, so anything further away is hidden by the depth test.
-    Renderer.DrawQuad(X - 2, Y - 2, 0, 4, 4, Col.R, Col.G, Col.B, 0.9);
+    // The newest samples are drawn solid so the current pitch stands out from
+    // the fading tail behind it.
+    if (N < 4) then
+      Renderer.DrawQuad(X - 3, Y - 3, 0, 6, 6, Col.R, Col.G, Col.B, 1)
+    else
+      Renderer.DrawQuad(X - 2, Y - 2, 0, 4, 4, Col.R, Col.G, Col.B, 0.55);
   end;
 end;
 
