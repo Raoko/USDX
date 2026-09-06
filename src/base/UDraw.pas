@@ -53,6 +53,7 @@ procedure SingDrawPlayerBGLine(Left, Top, Right: real; Track, PlayerIndex: integ
 procedure SingDrawPitchTrace(Left, Top, W: real; Track, PlayerIndex: integer; LineSpacing: integer = 15);
 procedure SingDrawPitchTraceReset;
 procedure SingDrawPitchKey(Left, Top: real; PlayerIndex: integer);
+procedure SingDrawTargetKey(Left, Top: real; Track, PlayerIndex: integer);
 
 //Draw Editor NoteLines
 procedure EditDrawLine(X, YBaseNote, W, H: real; Track: integer; NumLines: integer = 10);
@@ -678,6 +679,94 @@ begin
   else
     SetFontColor(0.45, 0.45, 0.45, 1);
   PrintText(Note);
+  SetFontStyle(ftRegular);
+  SetFontColor(1, 1, 1, 1);
+end;
+
+const
+  // URecord keeps its own copy of this table in its implementation section,
+  // so it cannot be reached from here.
+  SongToneNames: array[0..11] of UTF8String = (
+    'C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'
+  );
+
+function SongToneToName(Tone: integer): UTF8String;
+var
+  Step, Octave: integer;
+begin
+  // UltraStar song tones are semitones with 0 = C4.
+  Step := ((Tone mod 12) + 12) mod 12;
+  Octave := 4 + Floor(Tone / 12);
+  Result := SongToneNames[Step] + IntToStr(Octave);
+end;
+
+procedure SingDrawTargetKey(Left, Top: real; Track, PlayerIndex: integer);
+var
+  CurrentLine: integer;
+  N: integer;
+  Beat: real;
+  TargetTone: integer;
+  Active: boolean;
+  Found: boolean;
+  Caption: UTF8String;
+begin
+  if (Ini.PitchKey = 0) then
+    Exit;
+  if (CurrentSong.Tracks = nil) or (Track > High(CurrentSong.Tracks)) then
+    Exit;
+
+  CurrentLine := CurrentSong.Tracks[Track].CurrentLine;
+  if (CurrentLine > High(CurrentSong.Tracks[Track].Lines)) then
+    Exit;
+
+  Beat := LyricsState.MidBeat;
+  Found := false;
+  Active := false;
+  TargetTone := 0;
+
+  // Prefer the note being sung right now; otherwise look ahead to the next
+  // one in this line so the target is known before the syllable arrives.
+  for N := 0 to CurrentSong.Tracks[Track].Lines[CurrentLine].HighNote do
+  begin
+    with CurrentSong.Tracks[Track].Lines[CurrentLine].Notes[N] do
+    begin
+      if (NoteType = ntFreestyle) then
+        Continue;
+
+      if (StartBeat <= Beat) and (StartBeat + Duration > Beat) then
+      begin
+        TargetTone := Tone;
+        Active := true;
+        Found := true;
+        Break;
+      end;
+
+      if (not Found) and (StartBeat > Beat) then
+      begin
+        TargetTone := Tone;
+        Found := true;
+      end;
+    end;
+  end;
+
+  if not Found then
+    Exit;
+
+  if Active then
+    Caption := 'target ' + SongToneToName(TargetTone)
+  else
+    Caption := 'next ' + SongToneToName(TargetTone);
+
+  SetFontStyle(ftOutline);
+  SetFontSize(18);
+  SetFontPos(Left, Top);
+  SetFontZ(0);
+  // Solid while the note is being sung, dimmed while it is still ahead.
+  if Active then
+    SetFontColor(1, 1, 1, 1)
+  else
+    SetFontColor(0.7, 0.7, 0.7, 0.75);
+  PrintText(Caption);
   SetFontStyle(ftRegular);
   SetFontColor(1, 1, 1, 1);
 end;
@@ -1558,7 +1647,10 @@ begin
   // which only run where the song has notes - this must keep updating during
   // the intro, instrumental sections and the gaps between phrases.
   for I := 0 to PlayersPlay - 1 do
+  begin
     SingDrawPitchKey(20, 25 + I * 26, I);
+    SingDrawTargetKey(100, 25 + I * 26, 0, I);
+  end;
   // Draw the Notes
   if (PlayersPlay = 1) then
   begin
