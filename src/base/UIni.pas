@@ -170,6 +170,7 @@ type
       TextureSize:    integer;
       Oscilloscope:   integer;
       PitchTrace:     integer;
+      PitchKey:       integer;
       // not used
       //Spectrum:       integer;
       //Spectrograph:   integer;
@@ -380,6 +381,7 @@ const
   // SingBar Mod
   IOscilloscope:     array[0..1] of UTF8String  = ('Off', 'On');
   IPitchTrace:       array[0..1] of UTF8String  = ('Off', 'On');
+  IPitchKey:         array[0..1] of UTF8String  = ('Off', 'On');
 
   ISpectrum:         array[0..1] of UTF8String  = ('Off', 'On');
   ISpectrograph:     array[0..1] of UTF8String  = ('Off', 'On');
@@ -1611,6 +1613,9 @@ begin
   // the gaps between notes where the game normally draws nothing
   PitchTrace := ReadArrayIndex(IPitchTrace, IniFile, 'Graphics', 'PitchTrace', 1);
 
+  // PitchKey - live name of the note being sung, shown continuously
+  PitchKey := ReadArrayIndex(IPitchKey, IniFile, 'Graphics', 'PitchKey', 1);
+
   // Spectrum
   //Spectrum := ReadArrayIndex(ISpectrum, IniFile, 'Graphics', 'Spectrum', IGNORE_INDEX, 'Off');
 
@@ -1939,6 +1944,9 @@ begin
 
     // PitchTrace
     IniFile.WriteString('Graphics', 'PitchTrace', IPitchTrace[PitchTrace]);
+
+    // PitchKey
+    IniFile.WriteString('Graphics', 'PitchKey', IPitchKey[PitchKey]);
 
     // Spectrum
     //IniFile.WriteString('Graphics', 'Spectrum', ISpectrum[Spectrum]);

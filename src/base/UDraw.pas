@@ -52,6 +52,7 @@ procedure SingDrawPlayerLine(Left, Top, W: real; Track, PlayerIndex: integer; Li
 procedure SingDrawPlayerBGLine(Left, Top, Right: real; Track, PlayerIndex: integer; LineSpacing: integer = 15);
 procedure SingDrawPitchTrace(Left, Top, W: real; Track, PlayerIndex: integer; LineSpacing: integer = 15);
 procedure SingDrawPitchTraceReset;
+procedure SingDrawPitchKey(Left, Top: real; PlayerIndex: integer);
 
 //Draw Editor NoteLines
 procedure EditDrawLine(X, YBaseNote, W, H: real; Track: integer; NumLines: integer = 10);
@@ -640,6 +641,45 @@ begin
     // drawn at Z=0, so anything further away is hidden by the depth test.
     Renderer.DrawQuad(X - 2, Y - 2, 0, 4, 4, Col.R, Col.G, Col.B, 0.9);
   end;
+end;
+
+procedure SingDrawPitchKey(Left, Top: real; PlayerIndex: integer);
+var
+  Sound: TCaptureBuffer;
+  Note:  UTF8String;
+  Col:   TRGB;
+begin
+  if (Ini.PitchKey = 0) then
+    Exit;
+  if (PlayerIndex < 0) or (PlayerIndex >= IMaxPlayerCount) then
+    Exit;
+  if (PlayerIndex > High(AudioInputProcessor.Sound)) then
+    Exit;
+
+  Sound := AudioInputProcessor.Sound[PlayerIndex];
+
+  // ToneString already yields names like 'A4' or 'C#3', and '-' when the
+  // analyser has no usable pitch. It does not depend on the song having a
+  // note at this moment, so the readout stays live through the intro and
+  // between phrases.
+  Note := Sound.ToneString;
+
+  if (Party.bPartyGame) then
+    Col := GetPlayerColor(Ini.TeamColor[PlayerIndex])
+  else
+    Col := GetPlayerColor(Ini.PlayerColor[PlayerIndex]);
+
+  SetFontStyle(ftOutline);
+  SetFontSize(18);
+  SetFontPos(Left, Top);
+  SetFontZ(0);
+  if Sound.ToneValid then
+    SetFontColor(Col.R, Col.G, Col.B, 1)
+  else
+    SetFontColor(0.45, 0.45, 0.45, 1);
+  PrintText(Note);
+  SetFontStyle(ftRegular);
+  SetFontColor(1, 1, 1, 1);
 end;
 
 procedure SingDrawNoteLines(Left, Top, Right: real; LineSpacing: integer; LineThickness: single);
@@ -1513,6 +1553,12 @@ begin
   // draw notes lines
   if (ScreenSing.Settings.InputVisible) then
     SingDrawLines;
+
+  // Live note readout. Deliberately outside the per-layout blocks below,
+  // which only run where the song has notes - this must keep updating during
+  // the intro, instrumental sections and the gaps between phrases.
+  for I := 0 to PlayersPlay - 1 do
+    SingDrawPitchKey(20, 25 + I * 26, I);
   // Draw the Notes
   if (PlayersPlay = 1) then
   begin
