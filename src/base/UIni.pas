@@ -383,7 +383,7 @@ const
   IOscilloscope:     array[0..1] of UTF8String  = ('Off', 'On');
   IPitchTrace:       array[0..1] of UTF8String  = ('Off', 'On');
   IPitchKey:         array[0..1] of UTF8String  = ('Off', 'On');
-  IPitchSmoothing:   array[0..3] of UTF8String  = ('Off', 'Low', 'Medium', 'High');
+  IPitchSmoothing:   array[0..5] of UTF8String  = ('Off', 'Low', 'Medium', 'High', 'Max', 'Glacial');
 
   ISpectrum:         array[0..1] of UTF8String  = ('Off', 'On');
   ISpectrograph:     array[0..1] of UTF8String  = ('Off', 'On');

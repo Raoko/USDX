@@ -578,11 +578,13 @@ begin
   // How quickly the drawn pitch catches up with the detected one. Lower eases
   // more and lags further behind.
   case Ini.PitchSmoothing of
-    0: Result := 1.00;
-    1: Result := 0.35;
-    3: Result := 0.09;
+    0: Result := 1.000;
+    1: Result := 0.350;
+    3: Result := 0.050;
+    4: Result := 0.016;
+    5: Result := 0.006;
   else
-    Result := 0.18;
+    Result := 0.180;
   end;
 end;
 
@@ -592,7 +594,9 @@ begin
   case Ini.PitchSmoothing of
     0: Result := 0;
     1: Result := 2;
-    3: Result := 7;
+    3: Result := 14;
+    4: Result := 30;
+    5: Result := 60;
   else
     Result := 5;
   end;
