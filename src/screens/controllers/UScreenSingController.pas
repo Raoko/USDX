@@ -555,7 +555,18 @@ begin
 
       SDLK_K:
       begin
-        AudioPlayback.ToggleKaraoke;
+        if AudioPlayback.HasInstrumentalTrack then
+        begin
+          AudioPlayback.ToggleKaraoke;
+          // Without this the key is silent, and there is no way to tell
+          // whether it did anything until the next sung phrase.
+          if (Ini.VocalsVolume > 0) then
+            screenSingViewRef.WriteMessage('Original vocals')
+          else
+            screenSingViewRef.WriteMessage('Instrumental only');
+        end
+        else
+          screenSingViewRef.WriteMessage('This song has no separate vocal track');
       end;
 
       SDLK_RIGHT:

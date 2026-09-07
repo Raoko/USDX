@@ -862,6 +862,24 @@ begin
           end;
         end;
 
+      SDLK_K:
+      begin
+        // Choose instrumental or original vocals before starting, rather than
+        // having to fix it mid-song. The sing screen reads Ini.VocalsVolume
+        // when it loads, so setting it here carries through.
+        if (Ini.VocalsVolume > 0) then
+        begin
+          SetVocalsVolumePercent(0);
+          WriteMessage('Instrumental only');
+        end
+        else
+        begin
+          SetVocalsVolumePercent(100);
+          WriteMessage('Original vocals');
+        end;
+        Ini.Save;
+      end;
+
       SDLK_M: //Show SongMenu
         begin
           if (Songs.SongList.Count > 0) then
