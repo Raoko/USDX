@@ -562,6 +562,7 @@ type
     Tone:   real;    // absolute tone as reported by the analyser
     Valid:  boolean; // false when the analyser only saw noise
     Weight: real;    // 0..1, fades the sample in at onset and out afterwards
+    Jump:   boolean; // pitch leapt here: break the line rather than draw through
   end;
 
 var
@@ -596,14 +597,19 @@ function PitchSmoothingAlpha: real;
 begin
   // How quickly the drawn pitch catches up with the detected one. Lower eases
   // more and lags further behind.
+  // These used to be far slower because the trace was fed whole semitones and
+  // the easing was really interpolating between its steps. It is fed the
+  // detector's fractional pitch now, so the same visual smoothness costs a
+  // fraction of the lag: the old slowest setting trailed the voice by over
+  // three seconds.
   case Ini.PitchSmoothing of
     0: Result := 1.000;
-    1: Result := 0.350;
-    3: Result := 0.050;
-    4: Result := 0.016;
-    5: Result := 0.006;
+    1: Result := 0.600;
+    3: Result := 0.250;
+    4: Result := 0.150;
+    5: Result := 0.080;
   else
-    Result := 0.180;
+    Result := 0.400;
   end;
 end;
 
@@ -612,13 +618,28 @@ begin
   // Half-width of the averaging window applied to the drawn line.
   case Ini.PitchSmoothing of
     0: Result := 0;
-    1: Result := 2;
-    3: Result := 14;
-    4: Result := 30;
-    5: Result := 60;
+    1: Result := 1;
+    3: Result := 4;
+    4: Result := 8;
+    5: Result := 16;
   else
-    Result := 5;
+    Result := 2;
   end;
+end;
+
+function PitchClarityFade(Clarity: real): real;
+begin
+  // The detector reports a pitch for anything above the volume threshold,
+  // including breath, consonants and room noise, and the trace used to draw all
+  // of it as fact. Clarity is how far the CAMDF minimum dips below its own
+  // average, so it separates a sung tone from a hiss. Faded rather than cut, so
+  // an uncertain frame reads as uncertain instead of vanishing outright.
+  if (Clarity <= 0.10) then
+    Result := 0
+  else if (Clarity >= 0.30) then
+    Result := 1
+  else
+    Result := (Clarity - 0.10) / 0.20;
 end;
 
 const
@@ -707,7 +728,9 @@ var
   Glows: TParticleList;
   PreSum: array[0..PitchTraceLength] of real;
   PreCnt: array[0..PitchTraceLength] of integer;
-  PtOk: array[0..PitchTraceLength-1] of boolean;
+  PtOk, PtJump: array[0..PitchTraceLength-1] of boolean;
+  Clarity, BandGreen, BandAmber: real;
+  Jumped, OnPitch: boolean;
 begin
   if (Ini.PitchTrace = 0) then
     Exit;
@@ -764,6 +787,13 @@ begin
         end;
       end;
 
+  // Fold around the note the guide line is showing, including while it is
+  // still ahead. Leaving Centre at BaseNote + 6 through the run-up folded the
+  // trace around a different pitch than the one it was then compared against,
+  // so the head could read red for a singer already sitting on the coming note.
+  if HasTarget then
+    Centre := TargetTone;
+
   Sound := AudioInputProcessor.Sound[PlayerIndex];
   if (Sound = nil) then
     Exit;
@@ -774,9 +804,14 @@ begin
   // trace is laid out by sample age rather than by beat so it does not need to
   // span the same width as the notes.
   Gutter := 0;
-  if (Ini.PitchKey <> 0) and (W > 500) then
+  if (Ini.PitchKey <> 0) then
   begin
-    Gutter := 72;
+    // Split-screen layouts halve W, which fell under the old single threshold
+    // and silently dropped the readout altogether for three or more players.
+    if (W > 500) then
+      Gutter := 72
+    else if (W > 260) then
+      Gutter := 52;
     W := W - Gutter;
   end;
 
@@ -791,14 +826,22 @@ begin
   begin
     Slot := PitchTraceNext[PlayerIndex];
 
-    if Sound.ToneValid then
+    Clarity := PitchClarityFade(Sound.ToneClarity);
+
+    if Sound.ToneValid and (Clarity > 0) then
     begin
       // Median of the last three readings first: the detector occasionally
       // returns a single wildly wrong halftone, and averaging a spike spreads
       // it instead of removing it.
       PitchRecent[PlayerIndex][2] := PitchRecent[PlayerIndex][1];
       PitchRecent[PlayerIndex][1] := PitchRecent[PlayerIndex][0];
-      PitchRecent[PlayerIndex][0] := Sound.ToneAbs;
+      // ToneAbs is a whole semitone, so the trace was a staircase and the three
+      // filters below were really acting as an interpolator between its steps -
+      // which is why they had to be set so slow to look smooth. ToneCents holds
+      // the fractional part the detector already computed and previously only
+      // ever printed as text, so feed it in and let the filters do the job they
+      // are named for.
+      PitchRecent[PlayerIndex][0] := Sound.ToneAbs + Sound.ToneCents / 100;
       if (PitchRecentCount[PlayerIndex] < 3) then
         Inc(PitchRecentCount[PlayerIndex]);
 
@@ -810,10 +853,13 @@ begin
                       PitchRecent[PlayerIndex][2]));
 
       // Then ease towards it, so the line glides between the detector's
-      // updates rather than stepping. A genuine leap is snapped to instead:
-      // easing across an octave looks worse than the jump it replaces.
-      if (not PitchEasedValid[PlayerIndex]) or
-         (Abs(Median - PitchEased[PlayerIndex]) > 4) then
+      // updates rather than stepping. A leap is snapped to and marked instead,
+      // so the line is broken there rather than drawn through pitches that were
+      // never sung: a gap is honest, a smooth curve across an octave error is
+      // not.
+      Jumped := (not PitchEasedValid[PlayerIndex]) or
+                (Abs(Median - PitchEased[PlayerIndex]) > 1);
+      if Jumped then
         PitchEased[PlayerIndex] := Median
       else
         PitchEased[PlayerIndex] := PitchEased[PlayerIndex] +
@@ -826,8 +872,9 @@ begin
 
       PitchTraceBuffer[PlayerIndex][Slot].Tone := PitchEased[PlayerIndex];
       PitchTraceBuffer[PlayerIndex][Slot].Valid := true;
+      PitchTraceBuffer[PlayerIndex][Slot].Jump := Jumped;
       PitchTraceBuffer[PlayerIndex][Slot].Weight :=
-        PitchOnset[PlayerIndex] / PitchOnsetFrames;
+        (PitchOnset[PlayerIndex] / PitchOnsetFrames) * Clarity;
     end
     else if (PitchHold[PlayerIndex] > 0) and PitchEasedValid[PlayerIndex] then
     begin
@@ -836,6 +883,7 @@ begin
       Dec(PitchHold[PlayerIndex]);
       PitchTraceBuffer[PlayerIndex][Slot].Tone := PitchEased[PlayerIndex];
       PitchTraceBuffer[PlayerIndex][Slot].Valid := true;
+      PitchTraceBuffer[PlayerIndex][Slot].Jump := false;
       PitchTraceBuffer[PlayerIndex][Slot].Weight :=
         (PitchOnset[PlayerIndex] / PitchOnsetFrames) *
         (PitchHold[PlayerIndex] / PitchHoldFrames);
@@ -848,6 +896,7 @@ begin
       PitchRecentCount[PlayerIndex] := 0;
       PitchOnset[PlayerIndex] := 0;
       PitchTraceBuffer[PlayerIndex][Slot].Valid := false;
+      PitchTraceBuffer[PlayerIndex][Slot].Jump := false;
       PitchTraceBuffer[PlayerIndex][Slot].Weight := 0;
     end;
     PitchTraceNext[PlayerIndex] := (Slot + 1) mod PitchTraceLength;
@@ -864,6 +913,7 @@ begin
   else
     Col := GetPlayerColor(Ini.PlayerColor[PlayerIndex]);
   DotCol := Col;
+  OnPitch := false;
 
   // Samples are laid out by age rather than by beat: the newest sits at the
   // right-hand edge and older ones scroll away to the left. Anchoring to the
@@ -888,6 +938,7 @@ begin
     Index := (PitchTraceNext[PlayerIndex] - 1 - N + 2 * PitchTraceLength) mod PitchTraceLength;
 
     PtOk[Points] := PitchTraceBuffer[PlayerIndex][Index].Valid;
+    PtJump[Points] := PitchTraceBuffer[PlayerIndex][Index].Jump;
     PtW[Points] := PitchTraceBuffer[PlayerIndex][Index].Weight;
     PtX[Points] := Left + W * (1 - N / (PitchTraceLength - 1));
 
@@ -906,9 +957,21 @@ begin
   // reading every few frames, so the raw trail is a staircase; smoothing turns
   // it into the curve the ear actually hears.
   // Done with running sums rather than by re-adding the window at each point:
-  // at the slowest setting the window spans 121 samples across 512 points,
-  // which is around 58,000 additions per player per frame to produce a result
-  // that changed by one sample. The prefix arrays make it 512.
+  // the window spans up to 33 samples across 512 points, so the naive form is
+  // thousands of additions per player per frame to produce a result that
+  // changed by one sample. The prefix arrays make it 512 either way.
+
+  // Accuracy bands in semitones, scaled to the difficulty being played. The
+  // scoring code grades against 2, 1 or 0 semitones either side (UNote's
+  // Range := 2 - Level), so fixed bands painted the line red for singing the
+  // game was about to count as a hit. These stay tighter than the score - the
+  // point is to show which way to move - but they no longer contradict it.
+  case Ini.Difficulty of
+    0: begin BandGreen := 0.50; BandAmber := 1.50; end;
+    1: begin BandGreen := 0.35; BandAmber := 1.00; end;
+    else begin BandGreen := 0.20; BandAmber := 0.50; end;
+  end;
+
   Window := PitchSmoothingWindow;
   PreSum[0] := 0;
   PreCnt[0] := 0;
@@ -944,18 +1007,20 @@ begin
   begin
     // A break in detection leaves a gap rather than a line drawn across
     // silence, which would imply a pitch that was never sung.
-    if (not PtOk[N]) or (not PtOk[N + 1]) then
+    if (not PtOk[N]) or (not PtOk[N + 1]) or PtJump[N + 1] then
       Continue;
 
     DotCol := Col;
+    OnPitch := false;
     if HasTarget and (N >= Points - 5) then
     begin
       Offset := Abs(PtTone[N] - TargetTone);
-      if (Offset <= 0.5) then
+      OnPitch := (Offset <= BandGreen);
+      if OnPitch then
       begin
         DotCol.R := 0.25; DotCol.G := 0.95; DotCol.B := 0.35;
       end
-      else if (Offset <= 1.5) then
+      else if (Offset <= BandAmber) then
       begin
         DotCol.R := 0.98; DotCol.G := 0.75; DotCol.B := 0.20;
       end
@@ -968,9 +1033,6 @@ begin
     // Fade into the past so the eye lands on the current pitch, then scale by
     // the samples' own weight so onsets rise gently and endings fall away.
     Fade := (0.2 + 0.8 * (N / Points)) * Min(PtW[N], PtW[N + 1]);
-    // A slow wave travelling towards the head, so the line reads as carrying
-    // energy rather than sitting still. Kept shallow: any more and it flickers.
-    Fade := Fade * (0.85 + 0.15 * Sin(N * 0.25 - SDL_GetTicks() / 90.0));
     if (Fade <= 0.01) then
       Continue;
 
@@ -1058,7 +1120,10 @@ begin
 
       // Sparks thrown off the current pitch, in the trace's own colour. Rate
       // limited by chance rather than a timer so they do not arrive in step.
-      if (PtW[N] > 0.6) and (Random(100) < 22) then
+      // Only while on pitch. Sparks that fire regardless of accuracy are
+      // decoration; tied to the green band they are the right/wrong signal that
+      // the feedback research says a display needs in order to teach anything.
+      if OnPitch and (PtW[N] > 0.6) and (Random(100) < 22) then
         GoldenRec.Spawn(PtX[N] + RandomRange(-3, 4),
                         Smoothed[N] + RandomRange(-4, 5),
                         ScreenAct,
@@ -1085,9 +1150,14 @@ begin
   // carries the accuracy tint, so the badge is green, amber or red with it.
   if (HeadIdx >= 0) then
   begin
-    Caption := Sound.ToneString;
+    // Both badges have to name notes on one scale to be comparable at all. The
+    // capture buffer counts halftones from C2 and the song format counts from
+    // C4, so the sung tone is shifted into song space rather than printed with
+    // an octave digit two out from the target sitting right beside it.
+    Caption := '-';
     if Sound.ToneValid then
     begin
+      Caption := SongToneToName(Sound.ToneAbs - 24);
       if (Sound.ToneCents > 0) then
         Caption := Caption + ' +' + IntToStr(Sound.ToneCents)
       else if (Sound.ToneCents < 0) then

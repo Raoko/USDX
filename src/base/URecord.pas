@@ -92,6 +92,9 @@ type
       Tone:      integer;    // tone relative to one octave (e.g. C2=C3=C4). Range: 0-11
       ToneAbs:   integer;    // absolute (full range) tone (e.g. C2<>C3). Range: 0..NumHalftones-1
       ToneCents: integer;    // deviation from ToneAbs in cents. Range: -50..50
+      // How strongly periodic the analysed window was, 0..1. Display only:
+      // nothing in the scoring path reads it, so it cannot move a highscore.
+      ToneClarity: real;
 
       // methods
       constructor Create;
@@ -380,6 +383,7 @@ begin
   ToneAbs := -1;
   Tone    := -1;
   ToneCents := 0;
+  ToneClarity := 0;
 
   LockAnalysisBuffer();
   try
@@ -442,6 +446,8 @@ function TCaptureBuffer.AnalyzePitch(PDA: TPDAType): boolean;
 var
   Correlation: TCorrelationArray;
   Prev, Curr, Next, Denominator, Delta: real;
+  ClaritySum, ClarityMean: real;
+  ClarityIdx: integer;
 begin
   // prepare to analyze
   SetFrequenciesAndDelays;
@@ -464,6 +470,28 @@ begin
   end;
 
   Tone := ToneAbs mod 12;
+
+  // How strongly periodic the window was: the CAMDF minimum measured against
+  // the average of the whole curve. A clearly sung tone dips far below its own
+  // average, while breath, consonants and room noise barely dip at all. The
+  // detector otherwise throws this away - ArrayIndexOfMinimum returns only the
+  // index, so the depth of the minimum, which is the confidence, is lost.
+  ToneClarity := 0;
+  ClaritySum := 0;
+  for ClarityIdx := 0 to High(Correlation) do
+    ClaritySum := ClaritySum + Correlation[ClarityIdx];
+  if (ClaritySum > 0) and (Length(Correlation) > 0) then
+  begin
+    ClarityMean := ClaritySum / Length(Correlation);
+    if (ClarityMean > 0) then
+    begin
+      ToneClarity := 1 - (Correlation[ToneAbs] / ClarityMean);
+      if (ToneClarity < 0) then
+        ToneClarity := 0
+      else if (ToneClarity > 1) then
+        ToneClarity := 1;
+    end;
+  end;
 
   // The correlation array is sampled at exactly one entry per halftone, so
   // fitting a parabola through the minimum and its two neighbours recovers the
