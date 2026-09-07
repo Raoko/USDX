@@ -171,6 +171,7 @@ type
       Oscilloscope:   integer;
       PitchTrace:     integer;
       PitchKey:       integer;
+      PitchSmoothing: integer;
       // not used
       //Spectrum:       integer;
       //Spectrograph:   integer;
@@ -382,6 +383,7 @@ const
   IOscilloscope:     array[0..1] of UTF8String  = ('Off', 'On');
   IPitchTrace:       array[0..1] of UTF8String  = ('Off', 'On');
   IPitchKey:         array[0..1] of UTF8String  = ('Off', 'On');
+  IPitchSmoothing:   array[0..3] of UTF8String  = ('Off', 'Low', 'Medium', 'High');
 
   ISpectrum:         array[0..1] of UTF8String  = ('Off', 'On');
   ISpectrograph:     array[0..1] of UTF8String  = ('Off', 'On');
@@ -1616,6 +1618,10 @@ begin
   // PitchKey - live name of the note being sung, shown continuously
   PitchKey := ReadArrayIndex(IPitchKey, IniFile, 'Graphics', 'PitchKey', 1);
 
+  // PitchSmoothing - how much the pitch trace is eased. Higher settings
+  // flow more but lag further behind what is actually being sung.
+  PitchSmoothing := ReadArrayIndex(IPitchSmoothing, IniFile, 'Graphics', 'PitchSmoothing', 2);
+
   // Spectrum
   //Spectrum := ReadArrayIndex(ISpectrum, IniFile, 'Graphics', 'Spectrum', IGNORE_INDEX, 'Off');
 
@@ -1947,6 +1953,9 @@ begin
 
     // PitchKey
     IniFile.WriteString('Graphics', 'PitchKey', IPitchKey[PitchKey]);
+
+    // PitchSmoothing
+    IniFile.WriteString('Graphics', 'PitchSmoothing', IPitchSmoothing[PitchSmoothing]);
 
     // Spectrum
     //IniFile.WriteString('Graphics', 'Spectrum', ISpectrum[Spectrum]);

@@ -553,6 +553,12 @@ var
   PitchTraceBuffer: array[0..IMaxPlayerCount-1, 0..PitchTraceLength-1] of TPitchTraceSample;
   PitchTraceCount:  array[0..IMaxPlayerCount-1] of integer;
   PitchTraceNext:   array[0..IMaxPlayerCount-1] of integer;
+  // Last three raw readings per player, for median filtering, plus the eased
+  // value the trace is actually drawn from.
+  PitchRecent:      array[0..IMaxPlayerCount-1, 0..2] of real;
+  PitchRecentCount: array[0..IMaxPlayerCount-1] of integer;
+  PitchEased:       array[0..IMaxPlayerCount-1] of real;
+  PitchEasedValid:  array[0..IMaxPlayerCount-1] of boolean;
 
 procedure SingDrawPitchTraceReset;
 var
@@ -562,6 +568,33 @@ begin
   begin
     PitchTraceCount[PlayerIndex] := 0;
     PitchTraceNext[PlayerIndex] := 0;
+    PitchRecentCount[PlayerIndex] := 0;
+    PitchEasedValid[PlayerIndex] := false;
+  end;
+end;
+
+function PitchSmoothingAlpha: real;
+begin
+  // How quickly the drawn pitch catches up with the detected one. Lower eases
+  // more and lags further behind.
+  case Ini.PitchSmoothing of
+    0: Result := 1.00;
+    1: Result := 0.35;
+    3: Result := 0.09;
+  else
+    Result := 0.18;
+  end;
+end;
+
+function PitchSmoothingWindow: integer;
+begin
+  // Half-width of the averaging window applied to the drawn line.
+  case Ini.PitchSmoothing of
+    0: Result := 0;
+    1: Result := 2;
+    3: Result := 7;
+  else
+    Result := 5;
   end;
 end;
 
@@ -572,7 +605,7 @@ var
   Centre:     real;
   BaseNote:   integer;
   Slot, N, Index, Count, Used, Points, Window: integer;
-  Tone, Fade, Sum: real;
+  Tone, Fade, Sum, Median: real;
   TargetTone: integer;
   HasTarget:  boolean;
   TargetY, Offset: real;
@@ -650,7 +683,45 @@ begin
   if (not ScreenSing.Paused) then
   begin
     Slot := PitchTraceNext[PlayerIndex];
-    PitchTraceBuffer[PlayerIndex][Slot].Tone  := Sound.ToneAbs;
+
+    if Sound.ToneValid then
+    begin
+      // Median of the last three readings first: the detector occasionally
+      // returns a single wildly wrong halftone, and averaging a spike spreads
+      // it instead of removing it.
+      PitchRecent[PlayerIndex][2] := PitchRecent[PlayerIndex][1];
+      PitchRecent[PlayerIndex][1] := PitchRecent[PlayerIndex][0];
+      PitchRecent[PlayerIndex][0] := Sound.ToneAbs;
+      if (PitchRecentCount[PlayerIndex] < 3) then
+        Inc(PitchRecentCount[PlayerIndex]);
+
+      if (PitchRecentCount[PlayerIndex] < 3) then
+        Median := PitchRecent[PlayerIndex][0]
+      else
+        Median := Max(Min(PitchRecent[PlayerIndex][0], PitchRecent[PlayerIndex][1]),
+                  Min(Max(PitchRecent[PlayerIndex][0], PitchRecent[PlayerIndex][1]),
+                      PitchRecent[PlayerIndex][2]));
+
+      // Then ease towards it, so the line glides between the detector's
+      // updates rather than stepping. A genuine leap is snapped to instead:
+      // easing across an octave looks worse than the jump it replaces.
+      if (not PitchEasedValid[PlayerIndex]) or
+         (Abs(Median - PitchEased[PlayerIndex]) > 4) then
+        PitchEased[PlayerIndex] := Median
+      else
+        PitchEased[PlayerIndex] := PitchEased[PlayerIndex] +
+          PitchSmoothingAlpha * (Median - PitchEased[PlayerIndex]);
+
+      PitchEasedValid[PlayerIndex] := true;
+      PitchTraceBuffer[PlayerIndex][Slot].Tone := PitchEased[PlayerIndex];
+    end
+    else
+    begin
+      // Start clean after a silence rather than gliding out of a stale value.
+      PitchEasedValid[PlayerIndex] := false;
+      PitchRecentCount[PlayerIndex] := 0;
+    end;
+
     PitchTraceBuffer[PlayerIndex][Slot].Valid := Sound.ToneValid;
     PitchTraceNext[PlayerIndex] := (Slot + 1) mod PitchTraceLength;
     if (PitchTraceCount[PlayerIndex] < PitchTraceLength) then
@@ -712,7 +783,7 @@ begin
       Continue;
     Sum := 0;
     Window := 0;
-    for Index := Max(0, N - 3) to Min(Points - 1, N + 3) do
+    for Index := Max(0, N - PitchSmoothingWindow) to Min(Points - 1, N + PitchSmoothingWindow) do
       if PtOk[Index] then
       begin
         Sum := Sum + PtY[Index];

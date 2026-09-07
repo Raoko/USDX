@@ -44,6 +44,7 @@ uses
   ULanguage,
   UMenu,
   UMenuEqualizer,
+  UText,
   UMenuInteract,
   UMusic,
   UPath,
@@ -3406,6 +3407,21 @@ begin
   Equalizer.Draw;
 
   DrawExtensions;
+
+  // Tell the player the vocals toggle exists and which way it is set. A key
+  // with no visible effect on this screen is a key nobody finds.
+  SetFontStyle(ftOutline);
+  SetFontSize(12);
+  SetFontZ(0);
+  SetFontColor(1, 0.85, 0.15, 0.85);
+  SetFontPos(20, 575);
+  if (Ini.VocalsVolume > 0) then
+    PrintText('K - Original vocals')
+  else
+    PrintText('K - Instrumental only');
+  SetFontStyle(ftRegular);
+  SetFontSize(10);
+  SetFontColor(1, 1, 1, 1);
 
   //if (Mode = smPartyTournament) then
   //  PartyTimeLimit();
