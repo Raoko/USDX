@@ -539,6 +539,12 @@ begin;
 end;
 
 const
+  // Concentric bands faked around the line: widest and faintest first, the
+  // innermost whitened, which reads as a lit core inside a halo.
+  GlowLayers = 3;
+  GlowThickness: array[0..2] of single = (7.0, 4.0, 2.0);
+  GlowAlpha:     array[0..2] of single = (0.16, 0.30, 1.00);
+
   // Frames spent fading in once singing starts. The detector's first readings
   // after silence are unreliable, so they are shown faintly rather than
   // snapping the line to a pitch that was never really sung.
@@ -629,6 +635,11 @@ var
   Col, DotCol: TRGB;
   Segments:   TLineList;
   PtX, PtY, PtTone, PtW, Smoothed: array[0..PitchTraceLength-1] of real;
+  Lo, Hi, Cnt, L, GlowUsed: integer;
+  Pulse, GlowSize: real;
+  Glows: TParticleList;
+  PreSum: array[0..PitchTraceLength] of real;
+  PreCnt: array[0..PitchTraceLength] of integer;
   PtOk: array[0..PitchTraceLength-1] of boolean;
 begin
   if (Ini.PitchTrace = 0) then
@@ -815,25 +826,39 @@ begin
   // Average each point with its neighbours. The detector only produces a new
   // reading every few frames, so the raw trail is a staircase; smoothing turns
   // it into the curve the ear actually hears.
+  // Done with running sums rather than by re-adding the window at each point:
+  // at the slowest setting the window spans 121 samples across 512 points,
+  // which is around 58,000 additions per player per frame to produce a result
+  // that changed by one sample. The prefix arrays make it 512.
+  Window := PitchSmoothingWindow;
+  PreSum[0] := 0;
+  PreCnt[0] := 0;
+  for N := 0 to Points - 1 do
+    if PtOk[N] then
+    begin
+      PreSum[N + 1] := PreSum[N] + PtY[N];
+      PreCnt[N + 1] := PreCnt[N] + 1;
+    end
+    else
+    begin
+      PreSum[N + 1] := PreSum[N];
+      PreCnt[N + 1] := PreCnt[N];
+    end;
+
   for N := 0 to Points - 1 do
   begin
     if not PtOk[N] then
       Continue;
-    Sum := 0;
-    Window := 0;
-    for Index := Max(0, N - PitchSmoothingWindow) to Min(Points - 1, N + PitchSmoothingWindow) do
-      if PtOk[Index] then
-      begin
-        Sum := Sum + PtY[Index];
-        Inc(Window);
-      end;
-    if (Window > 0) then
-      Smoothed[N] := Sum / Window
+    Lo := Max(0, N - Window);
+    Hi := Min(Points - 1, N + Window);
+    Cnt := PreCnt[Hi + 1] - PreCnt[Lo];
+    if (Cnt > 0) then
+      Smoothed[N] := (PreSum[Hi + 1] - PreSum[Lo]) / Cnt
     else
       Smoothed[N] := PtY[N];
   end;
 
-  SetLength(Segments, Points);
+  SetLength(Segments, Points * GlowLayers);
   Used := 0;
 
   for N := 0 to Points - 2 do
@@ -864,26 +889,83 @@ begin
     // Fade into the past so the eye lands on the current pitch, then scale by
     // the samples' own weight so onsets rise gently and endings fall away.
     Fade := (0.2 + 0.8 * (N / Points)) * Min(PtW[N], PtW[N + 1]);
+    // A slow wave travelling towards the head, so the line reads as carrying
+    // energy rather than sitting still. Kept shallow: any more and it flickers.
+    Fade := Fade * (0.85 + 0.15 * Sin(N * 0.25 - SDL_GetTicks() / 90.0));
     if (Fade <= 0.01) then
       Continue;
 
-    Segments[Used].X1 := PtX[N];
-    Segments[Used].Y1 := Smoothed[N];
-    Segments[Used].X2 := PtX[N + 1];
-    Segments[Used].Y2 := Smoothed[N + 1];
-    Segments[Used].Z := 0;
-    Segments[Used].Thickness := 2;
-    Segments[Used].ColR := DotCol.R;
-    Segments[Used].ColG := DotCol.G;
-    Segments[Used].ColB := DotCol.B;
-    Segments[Used].Alpha := Fade;
-    Inc(Used);
+    // Three concentric bands, widest and faintest first, with a whitened core.
+    // Drawn additively so the halo lights the background rather than veiling it.
+    for L := 0 to GlowLayers - 1 do
+    begin
+      Segments[Used].X1 := PtX[N];
+      Segments[Used].Y1 := Smoothed[N];
+      Segments[Used].X2 := PtX[N + 1];
+      Segments[Used].Y2 := Smoothed[N + 1];
+      Segments[Used].Z := 0;
+      Segments[Used].Thickness := GlowThickness[L];
+      if (L = GlowLayers - 1) then
+      begin
+        Segments[Used].ColR := DotCol.R + (1 - DotCol.R) * 0.55;
+        Segments[Used].ColG := DotCol.G + (1 - DotCol.G) * 0.55;
+        Segments[Used].ColB := DotCol.B + (1 - DotCol.B) * 0.55;
+      end
+      else
+      begin
+        Segments[Used].ColR := DotCol.R;
+        Segments[Used].ColG := DotCol.G;
+        Segments[Used].ColB := DotCol.B;
+      end;
+      Segments[Used].Alpha := Fade * GlowAlpha[L];
+      Inc(Used);
+    end;
   end;
 
   if (Used > 0) then
   begin
     SetLength(Segments, Used);
+    Renderer.SetBlendMode(true);
     Renderer.DrawLines(Segments);
+
+    // Soft blobs along the trail, brightest at the head. This is what turns a
+    // stroke into something that looks lit.
+    SetLength(Glows, (Points div 14) + 2);
+    GlowUsed := 0;
+    Pulse := 1.0 + 0.12 * Sin(SDL_GetTicks() / 130.0);
+    N := 0;
+    while (N < Points) and (GlowUsed <= High(Glows)) do
+    begin
+      if PtOk[N] and (PtW[N] > 0.02) then
+      begin
+        if (N >= Points - 14) then
+          GlowSize := 26 * Pulse
+        else
+          GlowSize := 15 * Pulse;
+        Glows[GlowUsed].X := PtX[N] - GlowSize / 2;
+        Glows[GlowUsed].Y := Smoothed[N] - GlowSize / 2;
+        Glows[GlowUsed].W := GlowSize;
+        Glows[GlowUsed].H := GlowSize;
+        Glows[GlowUsed].ColR := DotCol.R;
+        Glows[GlowUsed].ColG := DotCol.G;
+        Glows[GlowUsed].ColB := DotCol.B;
+        Glows[GlowUsed].Alpha := PtW[N] * (0.06 + 0.30 * (N / Points));
+        Glows[GlowUsed].TexX1 := 15 / 16;
+        Glows[GlowUsed].TexY1 := 1;
+        Glows[GlowUsed].TexX2 := 1.0;
+        Glows[GlowUsed].TexY2 := 0;
+        Inc(GlowUsed);
+      end;
+      Inc(N, 14);
+    end;
+    if (GlowUsed > 0) and Assigned(Tex_Note_Perfect_Star) then
+    begin
+      SetLength(Glows, GlowUsed);
+      Renderer.DrawParticles(Tex_Note_Perfect_Star, Glows);
+    end;
+
+    // Restore: nothing else resets the blend function per frame.
+    Renderer.SetBlendMode(false);
   end;
 
   // A marker on the head of the line, so the current pitch is unmistakable.
@@ -892,6 +974,20 @@ begin
     begin
       Renderer.DrawQuad(PtX[N] - 3, Smoothed[N] - 3, 0, 6, 6,
                         DotCol.R, DotCol.G, DotCol.B, PtW[N]);
+
+      // Sparks thrown off the current pitch, in the trace's own colour. Rate
+      // limited by chance rather than a timer so they do not arrive in step.
+      if (PtW[N] > 0.6) and (Random(100) < 22) then
+        GoldenRec.Spawn(PtX[N] + RandomRange(-3, 4),
+                        Smoothed[N] + RandomRange(-4, 5),
+                        ScreenAct,
+                        RandomRange(5, 10),
+                        RandomRange(4, 12),
+                        -1,
+                        TraceSpark,
+                        (cardinal(Round(DotCol.R * 255)) shl 16) or
+                        (cardinal(Round(DotCol.G * 255)) shl 8) or
+                         cardinal(Round(DotCol.B * 255)));
       Break;
     end;
 end;

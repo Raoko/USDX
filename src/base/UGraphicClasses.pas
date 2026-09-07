@@ -44,7 +44,7 @@ const
 
 type
 
- TParticleType = (GoldenNote, PerfectNote, NoteHitTwinkle, PerfectLineTwinkle, ColoredStar, Flare);
+ TParticleType = (GoldenNote, PerfectNote, NoteHitTwinkle, PerfectLineTwinkle, ColoredStar, Flare, TraceSpark);
 
  TColour3f = record
    r, g, b: real;
@@ -251,6 +251,24 @@ begin
           mX := 0;
           mY := 0;
         end;
+    TraceSpark:
+        begin
+          // Small, drifting and coloured. ColoredStar is coloured but static,
+          // Flare drifts but is hardcoded gold, so neither suits a spark
+          // thrown off a line that is already in the player's colour.
+          Tex := Tex_Note_Star;
+          W := RandomRange(3,7);
+          H := W;
+          SizeMod := (-cos((Frame+1)*5*2*pi/16)*0.5+1.1);
+          SurviveSentenceChange := False;
+          SetLength(Scale,1);
+          SetLength(Col,1);
+          Col[0].b := (Player and $ff)/255;
+          Col[0].g := ((Player shr 8) and $ff)/255;
+          Col[0].r := ((Player shr 16) and $ff)/255;
+          mX := RandomRange(-4,3);
+          mY := RandomRange(-3,3);
+        end;
     Flare:
         begin
           Tex := Tex_Note_Star;
@@ -337,6 +355,15 @@ begin
     ColoredStar:
         begin
           Alpha := (-cos((Frame+1)*2*pi/16)+1); // neat fade-in-and-out
+        end;
+    TraceSpark:
+        begin
+          Alpha := (-cos((Frame+1)/16*1.7*pi+0.3*pi)+1);
+          SizeMod := (-cos((Frame+1)*5*2*pi/16)*0.5+1.1);
+          // Drift without gravity, so sparks hang in the air near the line
+          // rather than raining off the bottom of the staff.
+          X := X + mX;
+          Y := Y + mY;
         end;
     Flare:
         begin

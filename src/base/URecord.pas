@@ -342,9 +342,13 @@ begin
   LockAnalysisBuffer();
   try
 
-    // move old samples to the beginning of the array (if necessary)
-    for i := 0 to High(AnalysisBuffer)-SampleCount do
-      AnalysisBuffer[i] := AnalysisBuffer[i+SampleCount];
+    // move old samples to the beginning of the array (if necessary).
+    // Done as a block move: this runs on the capture callback thread while
+    // holding the analysis lock, so the shorter it is the less it can delay
+    // audio delivery.
+    if (SampleCount < Length(AnalysisBuffer)) then
+      Move(AnalysisBuffer[SampleCount], AnalysisBuffer[0],
+           (Length(AnalysisBuffer) - SampleCount) * SizeOf(SmallInt));
 
     // copy new samples to analysis buffer
     Move(Buffer[BufferOffset], AnalysisBuffer[Length(AnalysisBuffer)-SampleCount],

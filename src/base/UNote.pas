@@ -272,6 +272,11 @@ begin
     Result := 0;
 end;
 
+var
+  // Wall-clock of the last free-running pitch analysis, so it is not re-run
+  // once per rendered frame.
+  LastPitchAnalysis: cardinal = 0;
+
 procedure Sing(Screen: TScreenSingController);
 var
   LineIndex:  integer;
@@ -282,17 +287,29 @@ var
 begin
   LyricsState.UpdateBeats();
 
-  // Analyse every player's input on every frame, before the beat gate below.
+  // Analyse every player's input ahead of the beat gate below.
   // NewBeatDetect only runs once CurrentBeatD reaches 0, which does not happen
   // until the song's GAP has elapsed - over twenty seconds in some songs - so
   // anything that wants to show the singer's pitch during an intro, an
   // instrumental passage or between phrases had no data to work from at all.
   // AnalyzeBuffer takes the analysis-buffer lock itself and the record options
   // screen already calls it once per frame, so this is safe to repeat here.
-  for PlayerIndex := 0 to PlayersPlay - 1 do
-    if (PlayerIndex <= High(AudioInputProcessor.Sound)) and
-       (AudioInputProcessor.Sound[PlayerIndex] <> nil) then
-      AudioInputProcessor.Sound[PlayerIndex].AnalyzeBuffer;
+  //
+  // Rate-limited rather than run once per rendered frame: the analysis window
+  // is 4096 samples, 93 ms of audio, so at 60 fps consecutive calls re-examine
+  // 82% of the same samples for no new information. Each call is around half a
+  // millisecond and holds the lock the capture thread needs to deliver audio,
+  // so running it every frame both burned budget and contended with capture.
+  // 30 Hz is still finer than the detector's own resolution.
+  if ((Ini.PitchTrace <> 0) or (Ini.PitchKey <> 0)) and
+     (SDL_GetTicks - LastPitchAnalysis >= 33) then
+  begin
+    LastPitchAnalysis := SDL_GetTicks;
+    for PlayerIndex := 0 to PlayersPlay - 1 do
+      if (PlayerIndex <= High(AudioInputProcessor.Sound)) and
+         (AudioInputProcessor.Sound[PlayerIndex] <> nil) then
+        AudioInputProcessor.Sound[PlayerIndex].AnalyzeBuffer;
+  end;
 
   PetGr := 0;
   if (CurrentSong.isDuet) and (PlayersPlay <> 1) then

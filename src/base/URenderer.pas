@@ -249,6 +249,10 @@ type
       procedure SetOrthographicProjection(Left, Right, Bottom, Top, NearVal, FarVal: single); virtual; abstract;
       procedure SetViewPort(x, y: integer; width, height: cardinal); virtual; abstract;
       procedure SetBlend(Enabled: boolean); virtual; abstract;
+      // Additive blending, for glows that should light the background up
+      // rather than veil it. Callers must restore it: nothing resets the
+      // blend function per frame.
+      procedure SetBlendMode(Additive: boolean); virtual; abstract;
       function GetBlend(): boolean; virtual; abstract;
       procedure SetDepthTest(Enabled: boolean); virtual; abstract;
       function GetDepthTest(): boolean; virtual; abstract;

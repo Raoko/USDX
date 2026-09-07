@@ -325,12 +325,20 @@ begin
       Done := not Display.Draw;
       Renderer.SwapBuffers;
 
-      // FPS limiter
-      TicksCurrent := SDL_GetTicks;
-      Delay := 1000 div MAX_FPS - (TicksCurrent - TicksBeforeFrame);
+      // FPS limiter. When vsync is on, SwapBuffers already paces the loop, and
+      // stacking a millisecond-granularity sleep on top of it overshoots the
+      // next vblank often enough to drop frames: 1000 div 60 is 16, while a
+      // 60 Hz period alternates 17/17/16, so a frame measured at 15 ms sleeps
+      // and misses the vblank. Only limit when vsync is off, and round the
+      // budget rather than truncating it.
+      if (not Renderer.VSync) then
+      begin
+        TicksCurrent := SDL_GetTicks;
+        Delay := (1000 + MAX_FPS div 2) div MAX_FPS - (TicksCurrent - TicksBeforeFrame);
 
-      if Delay >= 1 then
-        SDL_Delay(Delay);
+        if Delay >= 1 then
+          SDL_Delay(Delay);
+      end;
 
       CountSkipTime;
       J:=1;

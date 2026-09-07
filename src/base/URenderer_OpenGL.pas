@@ -112,6 +112,7 @@ type
       procedure DrawParticles(Texture: TTexture; ParticleList: TParticleList); override;
       procedure DrawLineStrip(PointList: TPointList; ScaleX, ScaleY, TranslateX, TranslateY, ColR, ColG, ColB, Alpha: single); override;
       procedure SetBlend(Enabled: boolean); override;
+      procedure SetBlendMode(Additive: boolean); override;
       function GetBlend(): boolean; override;
       procedure SetDepthTest(Enabled: boolean); override;
       function GetDepthTest(): boolean; override;
@@ -1514,6 +1515,14 @@ begin
   {$IFDEF DEBUG_MODE}
   RaiseExceptionIfError;
   {$ENDIF};
+end;
+
+procedure TRenderer_OpenGLBase.SetBlendMode(Additive: boolean);
+begin
+  if (Additive) then
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE)
+  else
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 end;
 
 function TRenderer_OpenGLBase.GetBlend(): boolean;
