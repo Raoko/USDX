@@ -305,6 +305,7 @@ type
 
       //Extensions
       procedure DrawExtensions;
+      procedure DrawVocalsToggle;
 
       //Medley
       function  EnsureMedleyData(SongIndex: integer; MinSource: TMedleySource): boolean;
@@ -3131,6 +3132,79 @@ begin
   StopVideoPreview();
 end;
 
+procedure TScreenSong.DrawVocalsToggle;
+const
+  VocX = 626;  VocY = 14;  VocW = 158;  VocH = 40;  VocR = 9;
+  CapW = 26;   CapH = 26;  Pad  = 9;
+var
+  Accent:   TRGB;
+  CapX, CapY, LabelX: real;
+  Caption:  UTF8String;
+  Idx:      integer;
+  VocalsOn: boolean;
+begin
+  VocalsOn := (Ini.VocalsVolume > 0);
+
+  // Follow the skin's accent rather than hardcoding a colour, so this does not
+  // clash on Fall, Ocean, Summer and the rest.
+  Idx := ColorExists('ColorLight');
+  if (Idx >= 0) then
+    Accent := Color[Idx].RGB
+  else
+  begin
+    Accent.R := 0.28;
+    Accent.G := 0.69;
+    Accent.B := 0.97;
+  end;
+
+  if (not VocalsOn) then
+  begin
+    // Desaturate towards grey when the vocals are off, so the state is legible
+    // without reading the label.
+    Accent.R := 0.32 + 0.24 * Accent.R;
+    Accent.G := 0.32 + 0.24 * Accent.G;
+    Accent.B := 0.32 + 0.24 * Accent.B;
+  end;
+
+  Renderer.DrawRoundedBox(VocX, VocY, VocW, VocH, VocR, 0,
+                          Accent.R, Accent.G, Accent.B, 0.55);
+  Renderer.DrawRoundedBox(VocX + 1.5, VocY + 1.5, VocW - 3, VocH - 3,
+                          VocR - 1.5, 0, 0.05, 0.06, 0.08, 0.88);
+
+  // The key cap is drawn rather than textured: the themes ship button art for
+  // several keys but not for K, and adding one would have to be repeated in
+  // every skin.
+  CapX := VocX + Pad;
+  CapY := VocY + (VocH - CapH) / 2;
+  Renderer.DrawRoundedBox(CapX, CapY, CapW, CapH, 5, 0,
+                          Accent.R, Accent.G, Accent.B, 0.95);
+
+  SetFontStyle(ftBold);
+  SetFontItalic(false);
+  SetFontReflection(false, 0);
+  SetFontZ(0);
+  SetFontSize(15);
+  SetFontColor(0.05, 0.06, 0.08, 1);
+  SetFontPos(CapX + (CapW - TextWidth('K')) / 2,
+             CapY + (CapH - GetFontSize()) / 2);
+  PrintText('K');
+
+  if VocalsOn then
+    Caption := 'Original vocals'
+  else
+    Caption := 'Instrumental only';
+
+  SetFontSize(14);
+  SetFontColor(0.94, 0.95, 0.97, 1);
+  LabelX := CapX + CapW + 10;
+  SetFontPos(LabelX, VocY + (VocH - GetFontSize()) / 2);
+  PrintText(Caption);
+
+  SetFontStyle(ftRegular);
+  SetFontSize(10);
+  SetFontColor(1, 1, 1, 1);
+end;
+
 procedure TScreenSong.DrawExtensions;
 begin
   //Draw Song Menu
@@ -3406,22 +3480,12 @@ begin
 
   Equalizer.Draw;
 
-  DrawExtensions;
+  // Before DrawExtensions, not after: the song menu and jump-to dialog dim the
+  // screen behind themselves, and this should sit under that dimming rather
+  // than punching through it.
+  DrawVocalsToggle;
 
-  // Tell the player the vocals toggle exists and which way it is set. A key
-  // with no visible effect on this screen is a key nobody finds.
-  SetFontStyle(ftOutline);
-  SetFontSize(12);
-  SetFontZ(0);
-  SetFontColor(1, 0.85, 0.15, 0.85);
-  SetFontPos(20, 575);
-  if (Ini.VocalsVolume > 0) then
-    PrintText('K - Original vocals')
-  else
-    PrintText('K - Instrumental only');
-  SetFontStyle(ftRegular);
-  SetFontSize(10);
-  SetFontColor(1, 1, 1, 1);
+  DrawExtensions;
 
   //if (Mode = smPartyTournament) then
   //  PartyTimeLimit();

@@ -243,6 +243,9 @@ type
       procedure DrawLine(X1, Y1, X2, Y2, Z, LineThickness, ColR, ColG, ColB, Alpha: single);
       procedure DrawParticles(Texture: TTexture; ParticleList: TParticleList); virtual; abstract;
       procedure DrawBoundedBox(X1, Y1, X2, Y2, Z, LineThickness, ColR, ColG, ColB, Alpha: single); virtual;
+      // Filled rounded rectangle. There is no nine-slice or rounded-rect asset
+      // anywhere in the tree, so UI panels have to be built from primitives.
+      procedure DrawRoundedBox(X, Y, W, H, R, Z, ColR, ColG, ColB, Alpha: single); virtual;
       procedure DrawLineStrip(PointList: TPointList; ScaleX, ScaleY, TranslateX, TranslateY, ColR, ColG, ColB, Alpha: single); virtual; abstract;
 
       // State changes
@@ -646,6 +649,71 @@ begin
   QuadList[3].Alpha := Alpha;
 
   Renderer.DrawQuads(QuadList);
+end;
+
+procedure TRenderer.DrawRoundedBox(X, Y, W, H, R, Z, ColR, ColG, ColB, Alpha: single);
+const
+  CornerSteps = 4;
+var
+  Quads: TQuadList;
+  Tris:  TTriangleList;
+  I, C, Step, T: integer;
+  CX, CY, A0, A1, AStep: single;
+begin
+  if (W <= 0) or (H <= 0) then
+    Exit;
+  if (R < 0) then R := 0;
+  if (R > W / 2) then R := W / 2;
+  if (R > H / 2) then R := H / 2;
+
+  // Body: three abutting bands, so a translucent fill does not double-blend
+  // where they meet.
+  SetLength(Quads, 3);
+  Quads[0].X := X;     Quads[0].Y := Y + R;     Quads[0].W := W;         Quads[0].H := H - 2*R;
+  Quads[1].X := X + R; Quads[1].Y := Y;         Quads[1].W := W - 2*R;   Quads[1].H := R;
+  Quads[2].X := X + R; Quads[2].Y := Y + H - R; Quads[2].W := W - 2*R;   Quads[2].H := R;
+  for I := 0 to 2 do
+  begin
+    Quads[I].Z := Z;
+    Quads[I].Gradient := gdNone;
+    Quads[I].ColR := ColR;
+    Quads[I].ColG := ColG;
+    Quads[I].ColB := ColB;
+    Quads[I].Alpha := Alpha;
+  end;
+  DrawQuads(Quads);
+
+  if (R <= 0) then
+    Exit;
+
+  // Corners as small triangle fans.
+  SetLength(Tris, 4 * CornerSteps);
+  T := 0;
+  AStep := (Pi / 2) / CornerSteps;
+  for C := 0 to 3 do
+  begin
+    // Y grows downward here, so the quadrant start angles are not the usual ones.
+    case C of
+      0: begin CX := X + R;     CY := Y + R;     A0 := Pi;       end;
+      1: begin CX := X + W - R; CY := Y + R;     A0 := 1.5 * Pi; end;
+      2: begin CX := X + W - R; CY := Y + H - R; A0 := 0;        end;
+    else begin CX := X + R;     CY := Y + H - R; A0 := 0.5 * Pi; end;
+    end;
+    for Step := 0 to CornerSteps - 1 do
+    begin
+      A1 := A0 + Step * AStep;
+      Tris[T].X1 := CX;                       Tris[T].Y1 := CY;
+      Tris[T].X2 := CX + R * Cos(A1);         Tris[T].Y2 := CY + R * Sin(A1);
+      Tris[T].X3 := CX + R * Cos(A1 + AStep); Tris[T].Y3 := CY + R * Sin(A1 + AStep);
+      Tris[T].Z := Z;
+      Tris[T].ColR := ColR;
+      Tris[T].ColG := ColG;
+      Tris[T].ColB := ColB;
+      Tris[T].Alpha := Alpha;
+      Inc(T);
+    end;
+  end;
+  DrawTriangles(Tris);
 end;
 
 procedure TRenderer.ResetState();

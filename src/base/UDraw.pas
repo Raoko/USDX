@@ -621,6 +621,71 @@ begin
   end;
 end;
 
+const
+  // URecord keeps its own copy of this table in its implementation section,
+  // so it cannot be reached from here.
+  SongToneNames: array[0..11] of UTF8String = (
+    'C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'
+  );
+
+function SongToneToName(Tone: integer): UTF8String;
+var
+  Step, Octave: integer;
+begin
+  // UltraStar song tones are semitones with 0 = C4.
+  Step := ((Tone mod 12) + 12) mod 12;
+  Octave := 4 + Floor(Tone / 12);
+  Result := SongToneNames[Step] + IntToStr(Octave);
+end;
+
+// A small readout that rides the head of the pitch trace, drawn in a strip
+// reserved at the right-hand end so it never sits on top of a note block.
+procedure SingDrawTraceBadge(X, CentreY, MaxW, StaffTop, StaffBottom: real;
+                             const Caption: UTF8String; const Col: TRGB;
+                             FontSize, Alpha: real);
+var
+  BoxW, BoxH, BoxY, TextW: real;
+begin
+  if (Caption = '') or (Alpha <= 0.02) then
+    Exit;
+
+  // Style has to be selected first: the rest of the font state is stored per
+  // style, so setting size or colour before this writes into the wrong record.
+  SetFontStyle(ftBold);
+  SetFontItalic(false);
+  SetFontReflection(false, 0);
+  SetFontSize(FontSize);
+  SetFontZ(0);
+
+  TextW := TextWidth(Caption);
+  BoxW := TextW + 12;
+  if (BoxW > MaxW) then
+    BoxW := MaxW;
+  BoxH := GetFontSize() + 8;
+
+  BoxY := CentreY - BoxH / 2;
+  if (BoxY < StaffTop) then
+    BoxY := StaffTop;
+  if (BoxY + BoxH > StaffBottom) then
+    BoxY := StaffBottom - BoxH;
+
+  // Accent ring first, then the dark fill inset over it, which leaves the ring
+  // showing as a hairline. The dark fill is what keeps the text readable when
+  // the badge crosses a bright note block.
+  Renderer.DrawRoundedBox(X, BoxY, BoxW, BoxH, BoxH / 2, 0,
+                          Col.R, Col.G, Col.B, 0.55 * Alpha);
+  Renderer.DrawRoundedBox(X + 1.25, BoxY + 1.25, BoxW - 2.5, BoxH - 2.5,
+                          BoxH / 2 - 1.25, 0, 0.04, 0.05, 0.07, 0.86 * Alpha);
+
+  SetFontColor(Col.R, Col.G, Col.B, Alpha);
+  SetFontPos(X + (BoxW - TextW) / 2, BoxY + (BoxH - GetFontSize()) / 2);
+  PrintText(Caption);
+
+  SetFontStyle(ftRegular);
+  SetFontSize(10);
+  SetFontColor(1, 1, 1, 1);
+end;
+
 procedure SingDrawPitchTrace(Left, Top, W: real; Track, PlayerIndex: integer; LineSpacing: integer);
 var
   Sound:      TCaptureBuffer;
@@ -635,7 +700,9 @@ var
   Col, DotCol: TRGB;
   Segments:   TLineList;
   PtX, PtY, PtTone, PtW, Smoothed: array[0..PitchTraceLength-1] of real;
-  Lo, Hi, Cnt, L, GlowUsed: integer;
+  Lo, Hi, Cnt, L, GlowUsed, HeadIdx: integer;
+  Gutter, StaffTop, StaffBottom: real;
+  Caption: UTF8String;
   Pulse, GlowSize: real;
   Glows: TParticleList;
   PreSum: array[0..PitchTraceLength] of real;
@@ -700,6 +767,18 @@ begin
   Sound := AudioInputProcessor.Sound[PlayerIndex];
   if (Sound = nil) then
     Exit;
+
+  // Reserve a strip at the right-hand end for the live readout, so the label
+  // has somewhere to sit that is never over a note block. W is a value
+  // parameter, so shortening it here changes nothing for the callers, and the
+  // trace is laid out by sample age rather than by beat so it does not need to
+  // span the same width as the notes.
+  Gutter := 0;
+  if (Ini.PitchKey <> 0) and (W > 500) then
+  begin
+    Gutter := 72;
+    W := W - Gutter;
+  end;
 
   // ToneAbs rather than Tone: the scoring code rewrites Tone in place to line
   // it up with the note being sung, so the same pitch can be stored under
@@ -969,9 +1048,11 @@ begin
   end;
 
   // A marker on the head of the line, so the current pitch is unmistakable.
+  HeadIdx := -1;
   for N := Points - 1 downto 0 do
     if PtOk[N] and (PtW[N] > 0.01) then
     begin
+      HeadIdx := N;
       Renderer.DrawQuad(PtX[N] - 3, Smoothed[N] - 3, 0, 6, 6,
                         DotCol.R, DotCol.G, DotCol.B, PtW[N]);
 
@@ -990,6 +1071,38 @@ begin
                          cardinal(Round(DotCol.B * 255)));
       Break;
     end;
+
+  if (Gutter <= 0) then
+    Exit;
+
+  if (LineSpacing >= 15) then
+    StaffTop := Top - 105
+  else
+    StaffTop := Top - 95;
+  StaffBottom := StaffTop + 9 * LineSpacing;
+
+  // The note being sung, parked beside the head of the line. DotCol already
+  // carries the accuracy tint, so the badge is green, amber or red with it.
+  if (HeadIdx >= 0) then
+  begin
+    Caption := Sound.ToneString;
+    if Sound.ToneValid then
+    begin
+      if (Sound.ToneCents > 0) then
+        Caption := Caption + ' +' + IntToStr(Sound.ToneCents)
+      else if (Sound.ToneCents < 0) then
+        Caption := Caption + ' ' + IntToStr(Sound.ToneCents);
+    end;
+    SingDrawTraceBadge(Left + W + 8, Smoothed[HeadIdx], Gutter - 14,
+                       StaffTop, StaffBottom, Caption, DotCol, 13, PtW[HeadIdx]);
+  end;
+
+  // The note the song is asking for, at the height of its own guide line.
+  // Suppressed when it would overlap the live badge.
+  if HasTarget and ((HeadIdx < 0) or (Abs(TargetY - Smoothed[HeadIdx]) > 24)) then
+    SingDrawTraceBadge(Left + W + 8, TargetY, Gutter - 14,
+                       StaffTop, StaffBottom, SongToneToName(TargetTone),
+                       Col, 11, 0.55);
 end;
 
 procedure SingDrawPitchKey(Left, Top: real; PlayerIndex: integer);
@@ -1043,23 +1156,6 @@ begin
   SetFontSize(10);
   SetFontZ(0);
   SetFontColor(1, 1, 1, 1);
-end;
-
-const
-  // URecord keeps its own copy of this table in its implementation section,
-  // so it cannot be reached from here.
-  SongToneNames: array[0..11] of UTF8String = (
-    'C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'
-  );
-
-function SongToneToName(Tone: integer): UTF8String;
-var
-  Step, Octave: integer;
-begin
-  // UltraStar song tones are semitones with 0 = C4.
-  Step := ((Tone mod 12) + 12) mod 12;
-  Octave := 4 + Floor(Tone / 12);
-  Result := SongToneNames[Step] + IntToStr(Octave);
 end;
 
 procedure SingDrawTargetKey(Left, Top: real; Track, PlayerIndex: integer);
@@ -2046,12 +2142,15 @@ begin
   PlayerTracks[4] := TrackP5;
   PlayerTracks[5] := TrackP6;
 
-  for I := 0 to PlayersPlay - 1 do
-    if (I <= High(PlayerTracks)) then
-    begin
-      SingDrawPitchKey(20, 25 + I * 26, I);
-      SingDrawTargetKey(100, 25 + I * 26, PlayerTracks[I], I);
-    end;
+  // Only when the trace is off: with it on, the badge beside the line carries
+  // the same information without covering the song-title bar these sit under.
+  if (Ini.PitchTrace = 0) then
+    for I := 0 to PlayersPlay - 1 do
+      if (I <= High(PlayerTracks)) then
+      begin
+        SingDrawPitchKey(20, 25 + I * 26, I);
+        SingDrawTargetKey(100, 25 + I * 26, PlayerTracks[I], I);
+      end;
   // Draw the Notes
   if (PlayersPlay = 1) then
   begin
