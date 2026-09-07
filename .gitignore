@@ -70,3 +70,6 @@ ppaslink.sh
 /usdx-dlls-i686.zip
 /game/*.dll
 /game/*.debug
+
+# stray crash dumps from the shell, never source
+*.stackdump
