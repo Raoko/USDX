@@ -539,14 +539,23 @@ begin;
 end;
 
 const
+  // Frames spent fading in once singing starts. The detector's first readings
+  // after silence are unreliable, so they are shown faintly rather than
+  // snapping the line to a pitch that was never really sung.
+  PitchOnsetFrames = 45;
+  // Frames the line lingers after the voice stops, fading as it goes. Pausing
+  // for breath mid-phrase should not wipe the trace and start over.
+  PitchHoldFrames  = 60;
+
   // How many pitch samples are kept per player for the continuous trace.
   // At 60 fps this is roughly the last 8 seconds of singing.
   PitchTraceLength = 512;
 
 type
   TPitchTraceSample = record
-    Tone:  real;     // absolute tone as reported by the analyser
-    Valid: boolean;  // false when the analyser only saw noise
+    Tone:   real;    // absolute tone as reported by the analyser
+    Valid:  boolean; // false when the analyser only saw noise
+    Weight: real;    // 0..1, fades the sample in at onset and out afterwards
   end;
 
 var
@@ -559,6 +568,8 @@ var
   PitchRecentCount: array[0..IMaxPlayerCount-1] of integer;
   PitchEased:       array[0..IMaxPlayerCount-1] of real;
   PitchEasedValid:  array[0..IMaxPlayerCount-1] of boolean;
+  PitchOnset:       array[0..IMaxPlayerCount-1] of integer;
+  PitchHold:        array[0..IMaxPlayerCount-1] of integer;
 
 procedure SingDrawPitchTraceReset;
 var
@@ -570,6 +581,8 @@ begin
     PitchTraceNext[PlayerIndex] := 0;
     PitchRecentCount[PlayerIndex] := 0;
     PitchEasedValid[PlayerIndex] := false;
+    PitchOnset[PlayerIndex] := 0;
+    PitchHold[PlayerIndex] := 0;
   end;
 end;
 
@@ -615,7 +628,7 @@ var
   TargetY, Offset: real;
   Col, DotCol: TRGB;
   Segments:   TLineList;
-  PtX, PtY, PtTone, Smoothed: array[0..PitchTraceLength-1] of real;
+  PtX, PtY, PtTone, PtW, Smoothed: array[0..PitchTraceLength-1] of real;
   PtOk: array[0..PitchTraceLength-1] of boolean;
 begin
   if (Ini.PitchTrace = 0) then
@@ -717,16 +730,36 @@ begin
           PitchSmoothingAlpha * (Median - PitchEased[PlayerIndex]);
 
       PitchEasedValid[PlayerIndex] := true;
+      PitchHold[PlayerIndex] := PitchHoldFrames;
+      if (PitchOnset[PlayerIndex] < PitchOnsetFrames) then
+        Inc(PitchOnset[PlayerIndex]);
+
       PitchTraceBuffer[PlayerIndex][Slot].Tone := PitchEased[PlayerIndex];
+      PitchTraceBuffer[PlayerIndex][Slot].Valid := true;
+      PitchTraceBuffer[PlayerIndex][Slot].Weight :=
+        PitchOnset[PlayerIndex] / PitchOnsetFrames;
+    end
+    else if (PitchHold[PlayerIndex] > 0) and PitchEasedValid[PlayerIndex] then
+    begin
+      // Hold the last position and fade rather than cutting out. A breath
+      // between phrases should not restart the trace from nothing.
+      Dec(PitchHold[PlayerIndex]);
+      PitchTraceBuffer[PlayerIndex][Slot].Tone := PitchEased[PlayerIndex];
+      PitchTraceBuffer[PlayerIndex][Slot].Valid := true;
+      PitchTraceBuffer[PlayerIndex][Slot].Weight :=
+        (PitchOnset[PlayerIndex] / PitchOnsetFrames) *
+        (PitchHold[PlayerIndex] / PitchHoldFrames);
     end
     else
     begin
-      // Start clean after a silence rather than gliding out of a stale value.
+      // Genuinely silent: start clean next time rather than gliding out of a
+      // stale value.
       PitchEasedValid[PlayerIndex] := false;
       PitchRecentCount[PlayerIndex] := 0;
+      PitchOnset[PlayerIndex] := 0;
+      PitchTraceBuffer[PlayerIndex][Slot].Valid := false;
+      PitchTraceBuffer[PlayerIndex][Slot].Weight := 0;
     end;
-
-    PitchTraceBuffer[PlayerIndex][Slot].Valid := Sound.ToneValid;
     PitchTraceNext[PlayerIndex] := (Slot + 1) mod PitchTraceLength;
     if (PitchTraceCount[PlayerIndex] < PitchTraceLength) then
       Inc(PitchTraceCount[PlayerIndex]);
@@ -765,6 +798,7 @@ begin
     Index := (PitchTraceNext[PlayerIndex] - 1 - N + 2 * PitchTraceLength) mod PitchTraceLength;
 
     PtOk[Points] := PitchTraceBuffer[PlayerIndex][Index].Valid;
+    PtW[Points] := PitchTraceBuffer[PlayerIndex][Index].Weight;
     PtX[Points] := Left + W * (1 - N / (PitchTraceLength - 1));
 
     if PtOk[Points] then
@@ -827,8 +861,11 @@ begin
       end;
     end;
 
-    // Fade into the past so the eye lands on the current pitch.
-    Fade := 0.2 + 0.8 * (N / Points);
+    // Fade into the past so the eye lands on the current pitch, then scale by
+    // the samples' own weight so onsets rise gently and endings fall away.
+    Fade := (0.2 + 0.8 * (N / Points)) * Min(PtW[N], PtW[N + 1]);
+    if (Fade <= 0.01) then
+      Continue;
 
     Segments[Used].X1 := PtX[N];
     Segments[Used].Y1 := Smoothed[N];
@@ -851,10 +888,10 @@ begin
 
   // A marker on the head of the line, so the current pitch is unmistakable.
   for N := Points - 1 downto 0 do
-    if PtOk[N] then
+    if PtOk[N] and (PtW[N] > 0.01) then
     begin
       Renderer.DrawQuad(PtX[N] - 3, Smoothed[N] - 3, 0, 6, 6,
-                        DotCol.R, DotCol.G, DotCol.B, 1);
+                        DotCol.R, DotCol.G, DotCol.B, PtW[N]);
       Break;
     end;
 end;
