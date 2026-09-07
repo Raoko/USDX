@@ -381,7 +381,7 @@ const
 
   // SingBar Mod
   IOscilloscope:     array[0..1] of UTF8String  = ('Off', 'On');
-  IPitchTrace:       array[0..1] of UTF8String  = ('Off', 'On');
+  IPitchTrace:       array[0..2] of UTF8String  = ('Off', 'On', 'Replace');
   IPitchKey:         array[0..1] of UTF8String  = ('Off', 'On');
   IPitchSmoothing:   array[0..5] of UTF8String  = ('Off', 'Low', 'Medium', 'High', 'Max', 'Glacial');
 

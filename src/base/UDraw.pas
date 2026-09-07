@@ -1437,6 +1437,11 @@ var
 //  R, G, B, A: real;
   NotesH2:    real;
 begin
+  // 'Replace' hands the job of showing what was sung to the pitch trace, which
+  // draws the same information as a continuous line instead of a row of blocks.
+  // Scoring is untouched either way - this only decides what is drawn.
+  if (Ini.PitchTrace = 2) then
+    Exit;
   if (ScreenSing.Settings.InputVisible) then
   begin
     //Log.LogStatus('Player notes', 'SingDraw');
@@ -1576,6 +1581,11 @@ var
   A:          single;
   Texture:        TTexture;
 begin
+  // 'Replace' hands the job of showing what was sung to the pitch trace, which
+  // draws the same information as a continuous line instead of a row of blocks.
+  // Scoring is untouched either way - this only decides what is drawn.
+  if (Ini.PitchTrace = 2) then
+    Exit;
   if (ScreenSing.settings.NotesVisible[PlayerIndex]) then
   begin
     A := sqrt((1 + sin(AudioPlayback.Position * 3)))/2 + 0.05;
